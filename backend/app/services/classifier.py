@@ -7,10 +7,7 @@ schema at temperature 0 (one retry inside chat_json), persist result.
 Rule execution happens in M3; this module only sets classification fields.
 """
 
-import fnmatch
-import re
 from datetime import UTC, datetime
-from email.utils import parseaddr
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,6 +16,7 @@ from app.logging_setup import get_logger
 from app.models import Category, Email, EmailStatus
 from app.services import gmail, llm, settings_service
 from app.services.gmail import GmailAuthError, GmailClient
+from app.services.matchers import sender_matches
 
 log = get_logger(__name__)
 
@@ -32,25 +30,6 @@ CLASSIFICATION_SCHEMA_TEMPLATE = {
     "required": ["category", "confidence", "rationale"],
     "additionalProperties": False,
 }
-
-
-def _sender_matches(patterns: list[str], sender: str) -> bool:
-    """Glob or regex match against the full From header and the bare address."""
-    sender_l = (sender or "").lower()
-    _, addr = parseaddr(sender or "")
-    candidates = {sender_l, addr.lower()}
-    for pattern in patterns:
-        p = pattern.lower().strip()
-        if not p:
-            continue
-        if any(fnmatch.fnmatch(c, p) for c in candidates) or p in sender_l:
-            return True
-        try:
-            if re.search(pattern, sender, re.IGNORECASE):
-                return True
-        except re.error:
-            pass
-    return False
 
 
 def build_classification_prompt(categories: list[Category], email: Email,
@@ -114,8 +93,10 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
 
 
 async def classify_pending(session: Session, limit: int = 50) -> dict:
-    """Classify up to `limit` pending emails. LLM-unreachable stops the batch
-    and leaves the remainder pending (acceptance test §10.7)."""
+    """Classify up to `limit` pending emails, then run the rule engine on each.
+    LLM-unreachable stops the batch and leaves the remainder pending (§10.7)."""
+    from app.services import rules as rules_engine
+
     settings = settings_service.get_all_settings(session, redact=False)
     categories = list(session.scalars(
         select(Category).where(Category.enabled.is_(True)).order_by(Category.id)))
@@ -123,10 +104,14 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
         select(Email).where(Email.status == EmailStatus.pending.value)
         .order_by(Email.received_at).limit(limit)))
     if not pending:
-        return {"classified": 0, "skipped": 0, "errors": 0, "pending_left": 0}
+        return {"classified": 0, "skipped": 0, "errors": 0, "actioned": 0,
+                "pending_left": 0}
 
     ignore_patterns = settings.get("ignore_senders") or []
-    counts = {"classified": 0, "skipped": 0, "errors": 0}
+    dry_run = bool(settings.get("dry_run", True))
+    all_rules = rules_engine.load_enabled_rules(session)
+    hard_rules = [r for r in all_rules if rules_engine.is_hard_rule(r)]
+    counts = {"classified": 0, "skipped": 0, "errors": 0, "actioned": 0}
 
     client_secret = settings.get("gmail_client_secret_json")
     if not client_secret:
@@ -134,24 +119,42 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
     client = GmailClient(session, client_secret)
     try:
         for email in pending:
-            if _sender_matches(ignore_patterns, email.sender or ""):
+            if sender_matches(ignore_patterns, email.sender or ""):
                 email.status = EmailStatus.skipped.value
                 counts["skipped"] += 1
                 session.commit()
                 continue
-            if not categories:
-                break  # nothing to classify against; leave pending
-            try:
-                await classify_email(session, client, email, categories, settings)
-            except llm.LLMUnavailable as e:
-                log.warning("llm_unreachable_batch_stopped", error=str(e))
-                session.commit()
-                break
+
+            hard = next((r for r in hard_rules
+                         if sender_matches([r.match_sender_pattern], email.sender or "")),
+                        None)
+            if hard is not None:
+                # Deterministic pre-filter: bypass the LLM entirely (§4.2.1).
+                email.confidence = 1.0
+                email.rationale = f"hard rule: {hard.name}"
+                email.classified_at = datetime.now(UTC)
+                email.status = EmailStatus.classified.value
+            else:
+                if not categories:
+                    break  # nothing to classify against; leave pending
+                try:
+                    await classify_email(session, client, email, categories, settings)
+                except llm.LLMUnavailable as e:
+                    log.warning("llm_unreachable_batch_stopped", error=str(e))
+                    session.commit()
+                    break
+
             counts["classified" if email.status == EmailStatus.classified.value
                    else "errors"] += 1
             session.commit()
             log.info("email_classified", email_id=email.id, status=email.status,
                      category_id=email.classification_id, confidence=email.confidence)
+
+            if email.status == EmailStatus.classified.value and all_rules:
+                acted = await rules_engine.apply_rules_to_email(
+                    session, client, email, all_rules, dry_run)
+                if acted:
+                    counts["actioned"] += 1
     finally:
         await client.aclose()
 

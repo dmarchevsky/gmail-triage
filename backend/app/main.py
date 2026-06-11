@@ -15,6 +15,7 @@ from app.api import (
     gmail_routes,
     llm_routes,
     poller_routes,
+    rule_routes,
     settings_routes,
     status,
 )
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(poller_routes.router, prefix=api_prefix)
     app.include_router(category_routes.router, prefix=api_prefix)
     app.include_router(llm_routes.router, prefix=api_prefix)
+    app.include_router(rule_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
     if static_dir.is_dir():

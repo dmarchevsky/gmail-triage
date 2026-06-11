@@ -177,7 +177,8 @@ def test_ignore_list_skips_without_llm_call(auth_client, db_session, seeded):
     auth_client.put("/api/v1/settings", json={"ignore_senders": ["*@brew.com"]})
     chat = respx.post(CHAT_URL)
     resp = auth_client.post("/api/v1/classify/run-now")
-    assert resp.json() == {"classified": 0, "skipped": 1, "errors": 0, "pending_left": 0}
+    assert resp.json() == {"classified": 0, "skipped": 1, "errors": 0,
+                           "actioned": 0, "pending_left": 0}
     assert chat.call_count == 0
 
     from app.models import Email
