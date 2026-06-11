@@ -1,0 +1,97 @@
+:root {
+  font-family: system-ui, -apple-system, sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1c1e21;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #16181c;
+    color: #e4e6eb;
+  }
+}
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(320px, 90vw);
+}
+
+.login-form input,
+.login-form button {
+  padding: 0.6rem 0.8rem;
+  font-size: 1rem;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+}
+
+.login-form button {
+  cursor: pointer;
+  background: #2563eb;
+  color: white;
+  border: none;
+}
+
+.error {
+  color: #dc2626;
+}
+
+.dashboard {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.dashboard header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.badge {
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: #e5e7eb;
+  color: #111;
+}
+
+.badge.ok {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.badge.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge.dry-run {
+  background: #fde68a;
+  color: #78350f;
+  font-weight: 600;
+}
+
+.hint {
+  color: #6b7280;
+}

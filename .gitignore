@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+data/
+*.db
+*.db-wal
+*.db-shm
+node_modules/
+frontend/dist/
+backend/static/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/

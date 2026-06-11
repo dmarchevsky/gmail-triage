@@ -1,0 +1,32 @@
+services:
+  mailtriage:
+    build: .
+    image: mailtriage:latest
+    ports: ["8080:8080"]
+    environment:
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?set in .env}
+      - UI_PASSWORD=${UI_PASSWORD:?set in .env}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8081/v1}
+      - LLM_MODEL=${LLM_MODEL:-local}
+      - TZ=${TZ:-America/Los_Angeles}
+    volumes:
+      - mailtriage-data:/data
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+#  llama-cpp:                        # OPTIONAL bundled CPU inference.
+#    image: ghcr.io/ggml-org/llama.cpp:server
+#    command: ["-m", "/models/model.gguf", "--port", "8081", "--host", "0.0.0.0", "-c", "8192"]
+#    volumes: ["./models:/models:ro"]
+#    restart: unless-stopped
+#  # ...and set LLM_BASE_URL=http://llama-cpp:8081/v1 for the mailtriage service.
+
+volumes:
+  mailtriage-data:
