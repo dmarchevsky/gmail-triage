@@ -1,19 +1,35 @@
 """FastAPI application entrypoint."""
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 
-from app.api import auth_routes, settings_routes, status
+from app.api import auth_routes, gmail_routes, poller_routes, settings_routes, status
 from app.auth import AuthMiddleware
 from app.config import get_config
-from app.db import run_migrations
+from app.db import get_sessionmaker, run_migrations
 from app.logging_setup import get_logger, setup_logging
+from app.models import GmailAuth
+from app.services.gmail import assert_scopes_safe
+from app.services.poller import poller_loop
 
 log = get_logger(__name__)
+
+
+def assert_stored_scopes_safe() -> None:
+    """Startup guard (§6.1): refuse to run with a send-capable stored token."""
+    session = get_sessionmaker()()
+    try:
+        row = session.scalar(select(GmailAuth).limit(1))
+        if row is not None:
+            assert_scopes_safe(row.granted_scopes)
+    finally:
+        session.close()
 
 
 @asynccontextmanager
@@ -22,8 +38,13 @@ async def lifespan(app: FastAPI):
     setup_logging(cfg.log_level)
     cfg.validate_secrets()
     run_migrations()
+    assert_stored_scopes_safe()
+    poller_task = asyncio.create_task(poller_loop())
     log.info("startup_complete", db=cfg.sqlalchemy_url)
     yield
+    poller_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await poller_task
     log.info("shutdown")
 
 
@@ -36,6 +57,8 @@ def create_app() -> FastAPI:
     app.include_router(status.router, prefix=api_prefix)
     app.include_router(auth_routes.router, prefix=api_prefix)
     app.include_router(settings_routes.router, prefix=api_prefix)
+    app.include_router(gmail_routes.router, prefix=api_prefix)
+    app.include_router(poller_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
     if static_dir.is_dir():
