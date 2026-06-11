@@ -169,6 +169,7 @@ export interface Digest {
   include_links: boolean;
   include_metadata: boolean;
   max_emails: number;
+  send_no_news: boolean;
 }
 
 export interface DigestRun {

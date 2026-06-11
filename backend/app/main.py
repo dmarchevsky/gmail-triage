@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.api import (
     auth_routes,
     category_routes,
+    digest_routes,
     email_routes,
     feedback_routes,
     gmail_routes,
@@ -26,7 +27,7 @@ from app.config import get_config
 from app.db import get_sessionmaker, run_migrations
 from app.logging_setup import get_logger, setup_logging
 from app.models import GmailAuth
-from app.services import classifier, llm, settings_service
+from app.services import classifier, digest_scheduler, llm, settings_service
 from app.services.gmail import assert_scopes_safe
 from app.services.poller import poller_loop, set_classify_hook
 
@@ -59,8 +60,10 @@ async def lifespan(app: FastAPI):
     finally:
         session.close()
     poller_task = asyncio.create_task(poller_loop())
+    digest_scheduler.start()
     log.info("startup_complete", db=cfg.sqlalchemy_url)
     yield
+    digest_scheduler.shutdown()
     poller_task.cancel()
     with suppress(asyncio.CancelledError):
         await poller_task
@@ -83,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(rule_routes.router, prefix=api_prefix)
     app.include_router(email_routes.router, prefix=api_prefix)
     app.include_router(feedback_routes.router, prefix=api_prefix)
+    app.include_router(digest_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
     if static_dir.is_dir():

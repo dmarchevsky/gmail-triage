@@ -123,6 +123,29 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
     raise LLMInvalidOutput(last_error)
 
 
+async def chat_text(system: str, user: str, timeout: float,
+                    settings: dict[str, Any] | None = None,
+                    max_concurrency: int = 1) -> str:
+    """Plain-text chat completion (digest summaries)."""
+    base_url, model = resolve_llm_target(settings)
+    client = _client(base_url, timeout)
+    try:
+        async with _get_semaphore(max_concurrency):
+            completion = await client.chat.completions.create(
+                model=model, temperature=0,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}])
+        app_state.llm_status = "ok"
+        return (completion.choices[0].message.content or "").strip()
+    except (APIConnectionError, APITimeoutError) as e:
+        app_state.llm_status = "unreachable"
+        raise LLMUnavailable(str(e)) from e
+    except APIStatusError as e:
+        raise LLMError(f"LLM HTTP {e.status_code}: {e.message}") from e
+    finally:
+        await client.close()
+
+
 def _parse_against_schema(raw: str, schema: dict) -> dict | None:
     """Strict-ish validation: JSON object with required keys of correct type."""
     text = raw

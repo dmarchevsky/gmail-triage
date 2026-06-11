@@ -1,8 +1,7 @@
-"""${message}
+"""initial schema
 
-Revision ID: ${up_revision}
-Revises: ${down_revision | comma,n}
-Create Date: ${create_date}
+Revision ID: b25619e5e161
+Revises: None
 
 """
 import sqlalchemy as sa

@@ -206,6 +206,7 @@ class Digest(Base):
     include_links: Mapped[bool] = mapped_column(Boolean, default=True)
     include_metadata: Mapped[bool] = mapped_column(Boolean, default=True)
     max_emails: Mapped[int] = mapped_column(Integer, default=50)
+    send_no_news: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)
