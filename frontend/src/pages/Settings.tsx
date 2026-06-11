@@ -298,22 +298,47 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-section">
-        <h3>Config export</h3>
+        <h3>Config export / import</h3>
         <p className="sub">Full configuration as JSON, excluding secrets.</p>
-        <AsyncButton
-          onClick={async () => {
-            const data = await get<Record<string, unknown>>("/settings");
-            const blob = new Blob([JSON.stringify(data, null, 2)], {
-              type: "application/json",
-            });
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = "mailtriage-settings.json";
-            a.click();
-          }}
-        >
-          Export settings JSON
-        </AsyncButton>
+        <div className="head-actions">
+          <AsyncButton
+            onClick={async () => {
+              const data = await get<Record<string, unknown>>("/settings");
+              const blob = new Blob([JSON.stringify(data, null, 2)], {
+                type: "application/json",
+              });
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = "mailtriage-settings.json";
+              a.click();
+            }}
+          >
+            Export settings JSON
+          </AsyncButton>
+          <label className="checkbox">
+            Import:
+            <input
+              type="file"
+              accept="application/json"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const parsed = JSON.parse(await file.text());
+                  const r = await post<{ imported: string[] }>(
+                    "/settings/import",
+                    parsed,
+                  );
+                  setNote(`Imported: ${r.imported.join(", ")}`);
+                  load();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                }
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
       </div>
     </div>
   );

@@ -28,6 +28,23 @@ def put_settings(updates: dict[str, Any], session: Session = Depends(get_session
     return settings_service.get_all_settings(session)
 
 
+@router.post("/settings/import")
+def import_settings(payload: dict[str, Any],
+                    session: Session = Depends(get_session)) -> dict:
+    """Import a previously exported config. Unknown keys and the *_configured
+    markers are ignored; secret values are accepted only if explicitly present."""
+    applied = {}
+    for key, value in payload.items():
+        if key.endswith("_configured") or key not in settings_service.DEFAULTS:
+            continue
+        applied[key] = value
+    settings_service.update_settings(session, applied)
+    audit(session, "user", "settings_imported",
+          {"keys": [k for k in applied if k not in settings_service.SECRET_KEYS]})
+    return {"imported": sorted(applied.keys()),
+            "settings": settings_service.get_all_settings(session)}
+
+
 @router.put("/dry-run")
 def put_dry_run(body: dict, session: Session = Depends(get_session)) -> dict:
     enabled = body.get("enabled")
