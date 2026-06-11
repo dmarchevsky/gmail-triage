@@ -1,0 +1,12 @@
+Categories (name — criteria):
+
+{categories_block}
+
+If none of the criteria apply, use category "none".
+
+Email to classify:
+From: {sender}
+Subject: {subject}
+Date: {date}
+Body (may be truncated):
+{body}

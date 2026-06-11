@@ -9,14 +9,23 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from app.api import auth_routes, gmail_routes, poller_routes, settings_routes, status
+from app.api import (
+    auth_routes,
+    category_routes,
+    gmail_routes,
+    llm_routes,
+    poller_routes,
+    settings_routes,
+    status,
+)
 from app.auth import AuthMiddleware
 from app.config import get_config
 from app.db import get_sessionmaker, run_migrations
 from app.logging_setup import get_logger, setup_logging
 from app.models import GmailAuth
+from app.services import classifier, llm, settings_service
 from app.services.gmail import assert_scopes_safe
-from app.services.poller import poller_loop
+from app.services.poller import poller_loop, set_classify_hook
 
 log = get_logger(__name__)
 
@@ -39,6 +48,13 @@ async def lifespan(app: FastAPI):
     cfg.validate_secrets()
     run_migrations()
     assert_stored_scopes_safe()
+    set_classify_hook(classifier.classify_pending)
+    session = get_sessionmaker()()
+    try:
+        await llm.health_probe(settings_service.get_all_settings(session, redact=False),
+                               timeout=5)
+    finally:
+        session.close()
     poller_task = asyncio.create_task(poller_loop())
     log.info("startup_complete", db=cfg.sqlalchemy_url)
     yield
@@ -59,6 +75,8 @@ def create_app() -> FastAPI:
     app.include_router(settings_routes.router, prefix=api_prefix)
     app.include_router(gmail_routes.router, prefix=api_prefix)
     app.include_router(poller_routes.router, prefix=api_prefix)
+    app.include_router(category_routes.router, prefix=api_prefix)
+    app.include_router(llm_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
     if static_dir.is_dir():

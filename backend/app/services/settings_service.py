@@ -33,6 +33,7 @@ DEFAULTS: dict[str, Any] = {
     "llm_max_concurrency": 1,
     "telegram_bot_token": "",
     "telegram_default_chat_id": "",
+    "gmail_client_secret_json": "",
     "ignore_senders": [],  # list of glob/regex patterns skipped before LLM
     "poller_paused": False,
     "first_run_complete": False,
