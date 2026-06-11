@@ -1,4 +1,4 @@
-"""Feedback capture + listing. The criteria-revision proposal flow is M6."""
+"""Feedback capture, listing, and the criteria-revision proposal flow."""
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -6,8 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_session
-from app.models import Category, Email, Feedback, FeedbackStatus
+from app.models import Category, Email, Feedback, FeedbackStatus, ProposalStatus
+from app.services import feedback_service
 from app.services.audit import audit
+from app.services.llm import LLMError
 
 router = APIRouter()
 
@@ -57,12 +59,10 @@ async def create_feedback(email_id: int, body: FeedbackIn,
           {"feedback_id": feedback.id, "email_id": email_id,
            "correct_category_id": body.correct_category_id})
     session.commit()
-    await _maybe_schedule_proposal(session, feedback)
+    category_id = feedback_service.target_category_id(feedback)
+    if category_id is not None:
+        feedback_service.schedule_proposal_generation(category_id)
     return serialize(feedback, session)
-
-
-async def _maybe_schedule_proposal(session: Session, feedback: Feedback) -> None:
-    """M6 hooks the debounced criteria-revision job in here."""
 
 
 @router.get("/feedback")
@@ -75,3 +75,62 @@ def list_feedback(status: str | None = None,
         query = query.where(Feedback.status == status)
     rows = session.scalars(query.order_by(Feedback.created_at.desc()))
     return [serialize(f, session) for f in rows]
+
+
+def _get_feedback(session: Session, feedback_id: int) -> Feedback:
+    feedback = session.get(Feedback, feedback_id,
+                           options=[joinedload(Feedback.email)])
+    if feedback is None:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    return feedback
+
+
+@router.post("/feedback/{feedback_id}/generate-proposal")
+async def generate_proposal_now(feedback_id: int,
+                                session: Session = Depends(get_session)) -> dict:
+    """Manual/immediate proposal generation (the background job is debounced)."""
+    feedback = _get_feedback(session, feedback_id)
+    try:
+        await feedback_service.generate_proposal(session, feedback)
+    except LLMError as e:
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}") from e
+    return serialize(feedback, session)
+
+
+class ApproveBody(BaseModel):
+    criteria_md: str | None = None  # edited-then-approved text
+
+
+@router.post("/feedback/{feedback_id}/approve")
+def approve(feedback_id: int, body: ApproveBody | None = None,
+            session: Session = Depends(get_session)) -> dict:
+    feedback = _get_feedback(session, feedback_id)
+    if feedback.proposal_status != ProposalStatus.pending_review.value \
+            and not (body and body.criteria_md):
+        raise HTTPException(status_code=409, detail="No proposal pending review")
+    try:
+        category = feedback_service.approve_proposal(
+            session, feedback, body.criteria_md if body else None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"feedback": serialize(feedback, session),
+            "category_id": category.id,
+            "criteria_version": category.criteria_version}
+
+
+@router.post("/feedback/{feedback_id}/reject")
+def reject(feedback_id: int, session: Session = Depends(get_session)) -> dict:
+    feedback = _get_feedback(session, feedback_id)
+    if feedback.proposal_status != ProposalStatus.pending_review.value:
+        raise HTTPException(status_code=409, detail="No proposal pending review")
+    feedback_service.reject_proposal(session, feedback)
+    return serialize(feedback, session)
+
+
+@router.post("/feedback/{feedback_id}/dismiss")
+def dismiss(feedback_id: int, session: Session = Depends(get_session)) -> dict:
+    feedback = _get_feedback(session, feedback_id)
+    feedback.status = FeedbackStatus.dismissed.value
+    audit(session, "user", "feedback_dismissed", {"feedback_id": feedback_id})
+    session.commit()
+    return serialize(feedback, session)

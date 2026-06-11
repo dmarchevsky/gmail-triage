@@ -133,6 +133,13 @@ export interface Stats {
   week: { processed: number; actions_executed: number; actions_planned_dry_run: number };
   by_category: { category: string; count: number }[];
   recent_activity: { ts: string | null; actor: string; event_type: string; payload: unknown }[];
+  category_precision: {
+    category_id: number;
+    category: string;
+    classified_total: number;
+    flagged_wrong: number;
+    precision: number | null;
+  }[];
 }
 
 export interface Settings {

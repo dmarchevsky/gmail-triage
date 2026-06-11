@@ -1,0 +1,7 @@
+You maintain human-readable classification criteria for the category
+"{category}". Given the current criteria, a misclassified email, and the
+user's correction, produce REVISED criteria that would classify this email
+correctly without breaking prior correct behavior. Keep criteria general,
+concise (<300 words), and human-readable. Do not add sender-specific rules
+unless the user's note requests it. Output JSON: {{"criteria_md": "...",
+"explanation": "..."}}.

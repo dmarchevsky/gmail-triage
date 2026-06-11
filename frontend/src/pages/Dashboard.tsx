@@ -105,6 +105,36 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {stats.category_precision.some((p) => p.flagged_wrong > 0) && (
+            <>
+              <h3>Category precision (from your feedback)</h3>
+              <p className="sub">
+                LLM confidence is self-reported and uncalibrated — use these
+                empirical counts to tune rule confidence thresholds.
+              </p>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Classified</th>
+                    <th>Flagged wrong</th>
+                    <th>Precision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.category_precision.map((p) => (
+                    <tr key={p.category_id}>
+                      <td>{p.category}</td>
+                      <td>{p.classified_total}</td>
+                      <td>{p.flagged_wrong}</td>
+                      <td>{p.precision == null ? "—" : `${Math.round(p.precision * 100)}%`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
           <h3>Recent activity</h3>
           <table className="table">
             <thead>

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_session
-from app.models import AuditLog, Category, Email, EmailAction
+from app.models import AuditLog, Category, Email, EmailAction, Feedback
 
 router = APIRouter()
 
@@ -140,8 +140,33 @@ def stats(session: Session = Depends(get_session)) -> dict:
         "actor": r.actor, "event_type": r.event_type, "payload": r.payload,
     } for r in session.scalars(select(AuditLog).order_by(AuditLog.ts.desc()).limit(20))]
 
+    # Per-category precision from feedback: an email classified as C and
+    # flagged with a different correct category counts against C. LLM
+    # confidence is uncalibrated — these empirical counts are what the user
+    # should tune rule thresholds against (spec §4.2 note).
+    precision = []
+    for category in session.scalars(select(Category).order_by(Category.id)):
+        classified_total = session.scalar(select(func.count(Email.id)).where(
+            Email.classification_id == category.id,
+            Email.status.in_(["classified", "actioned"]))) or 0
+        flagged_wrong = session.scalar(
+            select(func.count(Feedback.id))
+            .join(Email, Email.id == Feedback.email_id)
+            .where(Email.classification_id == category.id,
+                   (Feedback.correct_category_id.is_(None))
+                   | (Feedback.correct_category_id != category.id))) or 0
+        precision.append({
+            "category_id": category.id,
+            "category": category.name,
+            "classified_total": classified_total,
+            "flagged_wrong": flagged_wrong,
+            "precision": (round(1 - flagged_wrong / classified_total, 3)
+                          if classified_total else None),
+        })
+
     return {"today": window(today), "week": window(week),
-            "by_category": by_category, "recent_activity": recent}
+            "by_category": by_category, "recent_activity": recent,
+            "category_precision": precision}
 
 
 @router.get("/audit-log")

@@ -97,6 +97,70 @@ def delete_category(category_id: int, session: Session = Depends(get_session)) -
     return {"deleted": category_id}
 
 
+@router.post("/{category_id}/reclassify-preview")
+async def reclassify_preview(category_id: int, body: dict | None = None,
+                             session: Session = Depends(get_session)) -> dict:
+    """Stretch API hook (§4.7.6): re-classify this category's recent emails
+    against the CURRENT criteria without persisting; returns the diff."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import Email, EmailStatus
+    from app.services import classifier, llm, settings_service
+    from app.services.gmail import GmailAuthError, GmailClient
+
+    category = session.get(Category, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    days = int((body or {}).get("days", 7))
+    limit = min(int((body or {}).get("limit", 25)), 50)
+
+    settings = settings_service.get_all_settings(session, redact=False)
+    categories = list(session.scalars(
+        select(Category).where(Category.enabled.is_(True)).order_by(Category.id)))
+    emails = list(session.scalars(
+        select(Email).where(
+            Email.classification_id == category_id,
+            Email.received_at >= datetime.now(UTC) - timedelta(days=days),
+            Email.status.in_([EmailStatus.classified.value,
+                              EmailStatus.actioned.value]))
+        .order_by(Email.received_at.desc()).limit(limit)))
+
+    client_secret = settings.get("gmail_client_secret_json")
+    if not client_secret:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+    client = GmailClient(session, client_secret)
+    diffs = []
+    try:
+        for email in emails:
+            body_text = await classifier.fetch_body(session, client, email)
+            system, user, schema = classifier.build_classification_prompt(
+                categories, email, body_text,
+                int(settings["classify_body_max_chars"]))
+            try:
+                result = await llm.chat_json(
+                    system, user, schema, "email_classification",
+                    timeout=float(settings["llm_classify_timeout_seconds"]),
+                    settings=settings,
+                    max_concurrency=int(settings["llm_max_concurrency"]))
+            except llm.LLMError as e:
+                diffs.append({"email_id": email.id, "error": str(e)[:200]})
+                continue
+            new_name = result["category"]
+            if new_name != category.name:
+                diffs.append({
+                    "email_id": email.id, "subject": email.subject,
+                    "old_category": category.name, "new_category": new_name,
+                    "new_confidence": result["confidence"],
+                    "rationale": result["rationale"],
+                })
+    except GmailAuthError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    finally:
+        await client.aclose()
+    return {"tested": len(emails), "changed": len(diffs), "diffs": diffs,
+            "note": "Preview only — nothing was persisted or executed."}
+
+
 @router.get("/{category_id}/criteria-history")
 def criteria_history(category_id: int, session: Session = Depends(get_session)) -> list[dict]:
     if session.get(Category, category_id) is None:
