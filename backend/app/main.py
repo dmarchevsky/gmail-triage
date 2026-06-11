@@ -12,6 +12,8 @@ from sqlalchemy import select
 from app.api import (
     auth_routes,
     category_routes,
+    email_routes,
+    feedback_routes,
     gmail_routes,
     llm_routes,
     poller_routes,
@@ -79,6 +81,8 @@ def create_app() -> FastAPI:
     app.include_router(category_routes.router, prefix=api_prefix)
     app.include_router(llm_routes.router, prefix=api_prefix)
     app.include_router(rule_routes.router, prefix=api_prefix)
+    app.include_router(email_routes.router, prefix=api_prefix)
+    app.include_router(feedback_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
     if static_dir.is_dir():
