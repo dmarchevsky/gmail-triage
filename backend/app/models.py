@@ -39,9 +39,11 @@ class UTCDateTime(TypeDecorator):
         return value
 
     def process_result_value(self, value, dialect):
-        if value is not None and value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value
+        if value is None:
+            return value
+        if value.tzinfo is None:  # SQLite returns naive (stored UTC)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)  # Postgres returns aware in session tz
 
 
 class Base(DeclarativeBase):

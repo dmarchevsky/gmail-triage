@@ -6,19 +6,38 @@ services:
     environment:
       - APP_SECRET_KEY=${APP_SECRET_KEY:?set in .env}
       - UI_PASSWORD=${UI_PASSWORD:?set in .env}
+      - DATABASE_URL=postgresql+psycopg://mailtriage:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/mailtriage
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8081/v1}
       - LLM_MODEL=${LLM_MODEL:-local}
       - TZ=${TZ:-America/Los_Angeles}
     volumes:
-      - mailtriage-data:/data
+      - mailtriage-data:/data    # legacy SQLite (migration source / fallback)
     extra_hosts: ["host.docker.internal:host-gateway"]
     read_only: true
     tmpfs: ["/tmp"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/status"]
       interval: 30s
       timeout: 5s
       retries: 3
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_DB=mailtriage
+      - POSTGRES_USER=mailtriage
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - mailtriage-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailtriage -d mailtriage"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
 #  llama-cpp:                        # OPTIONAL bundled CPU inference.
@@ -30,3 +49,4 @@ services:
 
 volumes:
   mailtriage-data:
+  mailtriage-pg:

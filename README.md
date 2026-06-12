@@ -35,9 +35,15 @@ cp .env.example .env
 # edit .env:
 #   APP_SECRET_KEY=$(openssl rand -hex 32)
 #   UI_PASSWORD=<choose a password>
+#   POSTGRES_PASSWORD=$(openssl rand -hex 16)
 #   LLM_BASE_URL=http://host.docker.internal:8081/v1   # your llama.cpp
 docker compose up -d --build
 ```
+
+Compose runs two services: the app and a bundled PostgreSQL (not exposed on
+the host; `docker compose exec postgres psql -U mailtriage` to inspect).
+Outside Docker (bare-metal dev), leave `DATABASE_URL` unset and the app uses
+a local SQLite file under `./data` instead.
 
 Open http://localhost:8080, log in with `UI_PASSWORD`, and follow the
 first-run wizard: connect Gmail → test the LLM → create your first category.
@@ -143,19 +149,40 @@ tokens/request; digest synthesis up to ~8k (`-c 8192`).
 
 ### Backup & restore
 
-All state lives in the `mailtriage-data` volume (SQLite + encrypted tokens):
+State lives in PostgreSQL (`mailtriage-pg` volume); encrypted tokens are
+rows in it. Keep `APP_SECRET_KEY` with the backup — encrypted tokens are
+unreadable without it. `docker compose down && up` loses nothing.
 
 ```bash
 # backup
-docker run --rm -v mailtriage-data:/data -v "$PWD":/backup alpine \
-    tar czf /backup/mailtriage-backup.tgz -C /data .
-# restore (container stopped)
-docker run --rm -v mailtriage-data:/data -v "$PWD":/backup alpine \
-    sh -c "rm -rf /data/* && tar xzf /backup/mailtriage-backup.tgz -C /data"
+docker compose exec postgres pg_dump -U mailtriage mailtriage | gzip \
+    > mailtriage-pg-backup.sql.gz
+# restore (into a fresh, empty database)
+gunzip -c mailtriage-pg-backup.sql.gz | \
+    docker compose exec -T postgres psql -U mailtriage mailtriage
 ```
 
-Keep `APP_SECRET_KEY` with the backup — encrypted tokens are unreadable
-without it. `docker compose down && up` loses nothing (named volume).
+For bare-metal SQLite mode, back up the `./data/mailtriage.db` file (or the
+`mailtriage-data` volume) instead.
+
+### Migrating from SQLite (pre-Postgres installs)
+
+1. **Back up the SQLite file first:**
+   ```bash
+   docker run --rm -v mailtriage-data:/data -v "$PWD":/b alpine \
+       cp /data/mailtriage.db /b/mailtriage-sqlite-backup.db
+   ```
+2. Add `POSTGRES_PASSWORD` to `.env`, rebuild, start Postgres, migrate:
+   ```bash
+   docker compose build
+   docker compose up -d postgres
+   docker compose run --rm mailtriage python scripts/migrate_sqlite_to_pg.py
+   docker compose up -d
+   ```
+   The script creates the schema (Alembic), copies every table with ids
+   preserved, resets Postgres sequences, and verifies per-table row counts.
+   The SQLite file is left untouched in the `mailtriage-data` volume as a
+   fallback.
 
 ### Egress surface
 
