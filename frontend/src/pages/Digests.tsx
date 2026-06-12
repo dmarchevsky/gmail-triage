@@ -8,7 +8,6 @@ import {
   fmtDate,
   pct,
 } from "../components";
-import { useApp } from "../App";
 import { useToast } from "../toast";
 
 interface DigestForm {
@@ -217,7 +216,6 @@ function RunHistory({ digest, onClose }: { digest: Digest; onClose: () => void }
 }
 
 export default function Digests() {
-  const { status } = useApp();
   const [digests, setDigests] = useState<Digest[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Digest | null | "new">(null);
@@ -242,12 +240,6 @@ export default function Digests() {
           + New digest
         </button>
       </header>
-      {status?.dry_run && (
-        <p className="sub">
-          Dry-run is ON: "Run now" renders the digest here instead of sending to
-          Telegram.
-        </p>
-      )}
 
       <table className="table">
         <thead>
@@ -275,20 +267,32 @@ export default function Digests() {
               <td className="row-actions">
                 <AsyncButton
                   onClick={async () => {
-                    const r = await post<DigestRun>(`/digests/${d.id}/run-now`);
+                    const r = await post<DigestRun>(`/digests/${d.id}/run-now`, {
+                      preview: true,
+                    });
+                    toast.success(
+                      r.status === "empty"
+                        ? "No eligible emails."
+                        : `Preview rendered (${r.email_ids.length} emails) — see Runs`,
+                    );
+                  }}
+                >
+                  Preview
+                </AsyncButton>
+                <AsyncButton
+                  onClick={async () => {
+                    const r = await post<DigestRun>(`/digests/${d.id}/run-now`, {});
                     const message =
-                      r.status === "dry_run"
-                        ? `Dry-run rendered (${r.email_ids.length} emails) — see Runs`
-                        : r.status === "empty"
-                          ? "No eligible emails."
-                          : r.status === "success"
-                            ? `Sent (${r.email_ids.length} emails)`
-                            : `Run ${r.status}: ${r.error ?? ""}`;
+                      r.status === "empty"
+                        ? "No eligible emails."
+                        : r.status === "success"
+                          ? `Sent (${r.email_ids.length} emails)`
+                          : `Run ${r.status}: ${r.error ?? ""}`;
                     if (r.status === "error") toast.error(message);
                     else toast.success(message);
                   }}
                 >
-                  Run now
+                  Send now
                 </AsyncButton>
                 <button onClick={() => setHistory(d)}>Runs</button>
                 <button onClick={() => setEditing(d)}>Edit</button>

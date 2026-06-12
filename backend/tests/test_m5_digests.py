@@ -131,26 +131,27 @@ def test_digest_crud_validation(auth_client, digest_setup):
 
 
 @respx.mock
-def test_dry_run_renders_without_sending(auth_client, db_session, digest_setup):
+def test_preview_renders_without_sending(auth_client, db_session, digest_setup):
     chat = mock_llm_text()
     tg = respx.post(TG_SEND)
     d = digest_setup["digest"]
 
-    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
+                           json={"preview": True}).json()
     assert run["status"] == "dry_run"
     assert sorted(run["email_ids"]) == sorted([digest_setup["e2"], digest_setup["e1"]])
     assert run["summary_text"] == "Summary text."
-    assert tg.call_count == 0                       # nothing sent in dry-run
+    assert tg.call_count == 0                       # nothing sent in preview
     assert chat.call_count == 3                     # 2 micro + 1 synthesis
 
-    # Dry-run must NOT consume eligibility: run again, same emails eligible.
-    run2 = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    # Preview must NOT consume eligibility: preview again, same emails eligible.
+    run2 = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
+                            json={"preview": True}).json()
     assert sorted(run2["email_ids"]) == sorted(run["email_ids"])
 
 
 @respx.mock
 def test_live_send_and_watermark_no_email_twice(auth_client, db_session, digest_setup):
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     mock_llm_text()
     tg = respx.post(TG_SEND).mock(return_value=tg_ok())
     d = digest_setup["digest"]
@@ -184,7 +185,6 @@ def test_failed_send_keeps_emails_eligible(auth_client, db_session, digest_setup
                                            monkeypatch):
     import app.services.telegram as tg_mod
     monkeypatch.setattr(tg_mod, "RETRIES", 1)
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     mock_llm_text()
     respx.post(TG_SEND).respond(500, json={"ok": False})
     d = digest_setup["digest"]
@@ -201,7 +201,6 @@ def test_failed_send_keeps_emails_eligible(auth_client, db_session, digest_setup
 
 @respx.mock
 def test_empty_digest_skips_silently_but_logs_run(auth_client, digest_setup):
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     d = auth_client.post("/api/v1/digests", json={
         "name": "empty one", "category_ids": [], "min_confidence": 0.99}).json()
     tg = respx.post(TG_SEND)
@@ -221,7 +220,8 @@ def test_max_emails_cap_newest_first(auth_client, db_session, digest_setup):
         "cron_times": d["cron_times"], "timezone": d["timezone"],
         "min_confidence": 0.8, "max_emails": 1})
     mock_llm_text()
-    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
+                           json={"preview": True}).json()
     assert run["email_ids"] == [digest_setup["e2"]]  # newest of the two
 
 

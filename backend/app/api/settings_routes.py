@@ -46,13 +46,3 @@ def import_settings(payload: dict[str, Any],
     return {"imported": sorted(applied.keys()),
             "settings": settings_service.get_all_settings(session)}
 
-
-@router.put("/dry-run")
-def put_dry_run(body: dict, session: Session = Depends(get_session)) -> dict:
-    enabled = body.get("enabled")
-    if not isinstance(enabled, bool):
-        raise HTTPException(status_code=400, detail="body must be {enabled: bool}")
-    settings_service.set_setting(session, "dry_run", enabled)
-    audit(session, "user", "dry_run_toggled", {"enabled": enabled})
-    session.commit()
-    return {"dry_run": enabled}

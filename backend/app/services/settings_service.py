@@ -19,8 +19,6 @@ SECRET_KEYS = {
 }
 
 DEFAULTS: dict[str, Any] = {
-    "dry_run": True,
-    "dry_run_telegram_prefix": False,  # send digests with [DRY RUN] prefix instead of skipping
     "poll_interval_seconds": 300,
     "initial_lookback_hours": 24,
     "store_bodies": False,

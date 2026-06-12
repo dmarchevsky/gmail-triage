@@ -122,6 +122,8 @@ class Rule(Base):
     match_sender_pattern: Mapped[str | None] = mapped_column(Text)
     actions: Mapped[list] = mapped_column(JSON, default=list)  # see §4.3
     stop_processing: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-rule dry-run: True records planned actions without executing.
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)

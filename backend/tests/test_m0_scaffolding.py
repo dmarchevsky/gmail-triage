@@ -8,7 +8,7 @@ def test_status_is_public_and_db_migrated(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["dry_run"] is True  # default ON
+    assert body["rules_mode"] == {"live": 0, "dry": 0}
     assert body["gmail"]["connected"] is False
 
 
@@ -20,7 +20,6 @@ def test_login_and_settings_roundtrip(auth_client):
     resp = auth_client.get("/api/v1/settings")
     assert resp.status_code == 200
     settings = resp.json()
-    assert settings["dry_run"] is True
     assert settings["poll_interval_seconds"] == 300
     # secrets are redacted to *_configured markers
     assert "telegram_bot_token" not in settings
@@ -74,8 +73,3 @@ def test_refuses_default_secrets(monkeypatch):
     with pytest.raises(RuntimeError, match="UI_PASSWORD"):
         cfg.validate_secrets()
 
-
-def test_dry_run_toggle(auth_client):
-    resp = auth_client.put("/api/v1/dry-run", json={"enabled": False})
-    assert resp.status_code == 200
-    assert auth_client.get("/api/v1/status").json()["dry_run"] is False

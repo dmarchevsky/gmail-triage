@@ -24,7 +24,7 @@ def email_with(classification_id=None, confidence=None, sender="a@b.com", **kw):
 def rule_with(**kw):
     defaults = dict(id=1, name="r", enabled=True, priority=100,
                     match_category_id=None, match_min_confidence=0.0,
-                    match_sender_pattern=None,
+                    match_sender_pattern=None, dry_run=True,
                     actions=[{"type": "mark_read"}], stop_processing=True)
     defaults.update(kw)
     return Rule(**defaults)
@@ -182,9 +182,9 @@ def test_dry_run_records_actions_no_gmail_mutation(auth_client, db_session, pipe
 
 @respx.mock
 def test_live_mode_executes_label_read_archive(auth_client, db_session, pipeline):
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     auth_client.post("/api/v1/rules", json={
         "name": "label+read+archive", "match_category_id": pipeline["category"]["id"],
+        "dry_run": False,
         "actions": [{"type": "add_label", "category_id": pipeline["category"]["id"]},
                     {"type": "mark_read"}, {"type": "archive"}]})
 
@@ -212,10 +212,9 @@ def test_live_mode_executes_label_read_archive(auth_client, db_session, pipeline
 
 @respx.mock
 def test_live_mode_trash(auth_client, db_session, pipeline):
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     auth_client.post("/api/v1/rules", json={
         "name": "trash spam", "match_category_id": pipeline["category"]["id"],
-        "actions": [{"type": "trash"}]})
+        "dry_run": False, "actions": [{"type": "trash"}]})
 
     respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])
     respx.post(CHAT_URL).mock(return_value=classify_ok())
@@ -245,9 +244,8 @@ def test_hard_rule_bypasses_llm(auth_client, db_session, pipeline):
 @respx.mock
 def test_action_failure_recorded_not_executed(auth_client, db_session, pipeline):
     from app.services import gmail as gmail_mod
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     auth_client.post("/api/v1/rules", json={
-        "name": "archive", "actions": [{"type": "archive"}]})
+        "name": "archive", "dry_run": False, "actions": [{"type": "archive"}]})
 
     respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])
     respx.post(CHAT_URL).mock(return_value=classify_ok())
@@ -290,3 +288,133 @@ def test_rules_crud_reorder_and_test(auth_client, db_session):
 
     assert auth_client.delete(f"/api/v1/rules/{r1['id']}").status_code == 200
     assert len(auth_client.get("/api/v1/rules").json()) == 1
+
+
+# ── Per-rule dry-run: mixed mode + apply-planned ─────────────────────────────
+
+@respx.mock
+def test_mixed_live_and_dry_rules_on_one_email(auth_client, db_session, pipeline):
+    auth_client.post("/api/v1/rules", json={
+        "name": "live read", "match_category_id": pipeline["category"]["id"],
+        "dry_run": False, "stop_processing": False,
+        "actions": [{"type": "mark_read"}]})
+    auth_client.post("/api/v1/rules", json={
+        "name": "dry archive", "match_category_id": pipeline["category"]["id"],
+        "priority": 200, "actions": [{"type": "archive"}]})
+
+    respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])
+    respx.post(CHAT_URL).mock(return_value=classify_ok())
+    modify = respx.post(f"{GMAIL_API}/messages/m1/modify").respond(200, json={})
+
+    auth_client.post("/api/v1/classify/run-now")
+
+    # Live rule executed (mark_read only); dry rule only recorded.
+    payload = json.loads(modify.calls[0].request.content)
+    assert payload["removeLabelIds"] == ["UNREAD"]
+
+    from app.models import EmailAction
+    actions = {a.action_type: a for a in db_session.query(EmailAction).all()}
+    assert actions["mark_read"].executed and not actions["mark_read"].dry_run
+    assert not actions["archive"].executed and actions["archive"].dry_run
+    email = db_session.query(Email).one()
+    assert email.dry_run is False  # something ran live
+
+
+@pytest.fixture()
+def dry_planned(auth_client, db_session, pipeline):
+    """A dry rule that has recorded plans for one classified email."""
+    rule = auth_client.post("/api/v1/rules", json={
+        "name": "graduate me", "match_category_id": pipeline["category"]["id"],
+        "actions": [{"type": "add_label", "category_id": pipeline["category"]["id"]},
+                    {"type": "mark_read"}]}).json()
+    with respx.mock:
+        respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])
+        respx.post(CHAT_URL).mock(return_value=classify_ok())
+        auth_client.post("/api/v1/classify/run-now")
+    return rule
+
+
+def test_pending_planned_surfaced(auth_client, db_session, dry_planned):
+    rules = auth_client.get("/api/v1/rules").json()
+    assert rules[0]["dry_run"] is True
+    assert rules[0]["pending_planned"] == 2
+
+
+def test_apply_planned_requires_live_rule(auth_client, dry_planned):
+    resp = auth_client.post(f"/api/v1/rules/{dry_planned['id']}/apply-planned")
+    assert resp.status_code == 409
+    assert "dry-run" in resp.json()["detail"]
+
+
+@respx.mock
+def test_apply_planned_executes_recorded_plans(auth_client, db_session, dry_planned):
+    # Graduate the rule to live.
+    auth_client.put(f"/api/v1/rules/{dry_planned['id']}", json={
+        **{k: dry_planned[k] for k in
+           ["name", "enabled", "priority", "match_category_id",
+            "match_min_confidence", "match_sender_pattern", "actions",
+            "stop_processing"]},
+        "dry_run": False})
+
+    respx.get(f"{GMAIL_API}/labels").respond(200, json={"labels": [
+        {"id": "Label_7", "name": "MailTriage/MarketNews"}]})
+    modify = respx.post(f"{GMAIL_API}/messages/m1/modify").respond(200, json={})
+
+    resp = auth_client.post(f"/api/v1/rules/{dry_planned['id']}/apply-planned")
+    assert resp.status_code == 200
+    assert resp.json() == {"applied": 2, "failed": 0, "emails": 1}
+
+    payload = json.loads(modify.calls[0].request.content)
+    assert payload["addLabelIds"] == ["Label_7"]
+    assert payload["removeLabelIds"] == ["UNREAD"]
+
+    from app.models import EmailAction
+    db_session.expire_all()
+    actions = db_session.query(EmailAction).all()
+    assert all(a.executed and not a.dry_run and a.executed_at for a in actions)
+    assert db_session.query(Email).one().dry_run is False
+
+    # Idempotent: nothing left to apply.
+    resp = auth_client.post(f"/api/v1/rules/{dry_planned['id']}/apply-planned")
+    assert resp.json() == {"applied": 0, "failed": 0, "emails": 0}
+    assert auth_client.get("/api/v1/rules").json()[0]["pending_planned"] == 0
+
+
+@respx.mock
+def test_apply_planned_records_failure_and_continues(auth_client, db_session,
+                                                     dry_planned, pipeline):
+    # Second email with plans from the same rule.
+    db_session.add(Email(gmail_message_id="m2", sender="Brew <crew@brew.com>",
+                         sender_domain="brew.com", subject="s2", snippet="x",
+                         status="pending"))
+    db_session.commit()
+    full2 = gmail_message("m2")
+    full2["payload"]["parts"] = pipeline["full"]["payload"]["parts"]
+    respx.get(f"{GMAIL_API}/messages/m2").respond(200, json=full2)
+    respx.post(CHAT_URL).mock(return_value=classify_ok())
+    auth_client.post("/api/v1/classify/run-now")
+
+    auth_client.put(f"/api/v1/rules/{dry_planned['id']}", json={
+        **{k: dry_planned[k] for k in
+           ["name", "enabled", "priority", "match_category_id",
+            "match_min_confidence", "match_sender_pattern", "actions",
+            "stop_processing"]},
+        "dry_run": False})
+
+    respx.get(f"{GMAIL_API}/labels").respond(200, json={"labels": [
+        {"id": "Label_7", "name": "MailTriage/MarketNews"}]})
+    respx.post(f"{GMAIL_API}/messages/m1/modify").respond(403, json={"error": "no"})
+    respx.post(f"{GMAIL_API}/messages/m2/modify").respond(200, json={})
+
+    resp = auth_client.post(f"/api/v1/rules/{dry_planned['id']}/apply-planned").json()
+    assert resp == {"applied": 2, "failed": 2, "emails": 2}
+
+    from app.models import EmailAction
+    db_session.expire_all()
+    by_email = {}
+    for a in db_session.query(EmailAction).all():
+        by_email.setdefault(a.email_id, []).append(a)
+    emails = {e.gmail_message_id: e.id for e in db_session.query(Email).all()}
+    assert all(a.error for a in by_email[emails["m1"]])       # failed, kept pending
+    assert all(not a.executed for a in by_email[emails["m1"]])
+    assert all(a.executed for a in by_email[emails["m2"]])    # succeeded

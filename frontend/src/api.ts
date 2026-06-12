@@ -50,7 +50,7 @@ export interface StatusResponse {
     last_error: string | null;
     paused: boolean;
   };
-  dry_run: boolean;
+  rules_mode: { live: number; dry: number };
 }
 
 export interface Category {
@@ -89,6 +89,8 @@ export interface Rule {
   match_sender_pattern: string | null;
   actions: RuleAction[];
   stop_processing: boolean;
+  dry_run: boolean;
+  pending_planned: number;
 }
 
 export interface EmailAction {
@@ -143,8 +145,6 @@ export interface Stats {
 }
 
 export interface Settings {
-  dry_run: boolean;
-  dry_run_telegram_prefix: boolean;
   poll_interval_seconds: number;
   initial_lookback_hours: number;
   store_bodies: boolean;

@@ -65,8 +65,7 @@ async def _persist_message(session: Session, client: GmailClient, message_id: st
     sender_addr = meta["sender"].lower()
     if any(own in sender_addr for own in own_addresses):
         return False
-    dry_run = bool(settings_service.get_setting(session, "dry_run"))
-    session.add(Email(**meta, status=EmailStatus.pending.value, dry_run=dry_run))
+    session.add(Email(**meta, status=EmailStatus.pending.value, dry_run=False))
     session.commit()
     log.info("email_ingested", gmail_message_id=message_id,
              sender_domain=meta["sender_domain"],

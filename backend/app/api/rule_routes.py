@@ -2,11 +2,11 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import Email, EmailStatus, Rule
+from app.models import Email, EmailAction, EmailStatus, Rule
 from app.services import rules as rules_engine
 from app.services.audit import audit
 
@@ -22,6 +22,7 @@ class RuleIn(BaseModel):
     match_sender_pattern: str | None = None
     actions: list[dict]
     stop_processing: bool = True
+    dry_run: bool = True  # per-rule: True records planned actions only
 
     @field_validator("actions")
     @classmethod
@@ -32,19 +33,28 @@ class RuleIn(BaseModel):
             raise ValueError(str(e)) from e
 
 
-def serialize(r: Rule) -> dict:
+def _pending_planned(session: Session, rule_id: int) -> int:
+    return session.scalar(select(func.count(EmailAction.id)).where(
+        EmailAction.rule_id == rule_id,
+        EmailAction.dry_run.is_(True),
+        EmailAction.executed.is_(False))) or 0
+
+
+def serialize(r: Rule, session: Session) -> dict:
     return {
         "id": r.id, "name": r.name, "enabled": r.enabled, "priority": r.priority,
         "match_category_id": r.match_category_id,
         "match_min_confidence": r.match_min_confidence,
         "match_sender_pattern": r.match_sender_pattern,
         "actions": r.actions, "stop_processing": r.stop_processing,
+        "dry_run": r.dry_run,
+        "pending_planned": _pending_planned(session, r.id),
     }
 
 
 @router.get("")
 def list_rules(session: Session = Depends(get_session)) -> list[dict]:
-    return [serialize(r) for r in
+    return [serialize(r, session) for r in
             session.scalars(select(Rule).order_by(Rule.priority, Rule.id))]
 
 
@@ -55,7 +65,7 @@ def create_rule(body: RuleIn, session: Session = Depends(get_session)) -> dict:
     session.flush()
     audit(session, "user", "rule_created", {"id": rule.id, "name": rule.name})
     session.commit()
-    return serialize(rule)
+    return serialize(rule, session)
 
 
 @router.put("/{rule_id}")
@@ -68,7 +78,7 @@ def update_rule(rule_id: int, body: RuleIn,
         setattr(rule, key, value)
     audit(session, "user", "rule_updated", {"id": rule.id})
     session.commit()
-    return serialize(rule)
+    return serialize(rule, session)
 
 
 @router.delete("/{rule_id}")
@@ -96,8 +106,34 @@ def reorder(body: ReorderBody, session: Session = Depends(get_session)) -> list[
         rules[rule_id].priority = (position + 1) * 10
     audit(session, "user", "rules_reordered", {"order": body.ordered_ids})
     session.commit()
-    return [serialize(r) for r in
+    return [serialize(r, session) for r in
             sorted(rules.values(), key=lambda r: (r.priority, r.id))]
+
+
+@router.post("/{rule_id}/apply-planned")
+async def apply_planned(rule_id: int, session: Session = Depends(get_session)) -> dict:
+    """Execute this (now live) rule's previously planned dry-run actions."""
+    from app.services import settings_service
+    from app.services.gmail import GmailAuthError, GmailClient
+
+    rule = session.get(Rule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    if rule.dry_run:
+        raise HTTPException(status_code=409,
+                            detail="Rule is still in dry-run; switch it to live first")
+    client_secret = settings_service.get_setting(session, "gmail_client_secret_json")
+    if not client_secret:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+    try:
+        client = GmailClient(session, client_secret)
+    except GmailAuthError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    try:
+        result = await rules_engine.apply_planned_for_rule(session, client, rule)
+    finally:
+        await client.aclose()
+    return result
 
 
 class TestBody(BaseModel):

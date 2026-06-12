@@ -128,8 +128,7 @@ async def classify_one(session: Session, client: GmailClient, email: Email,
              category_id=email.classification_id, confidence=email.confidence)
 
     if email.status == EmailStatus.classified.value and rules:
-        await rules_engine.apply_rules_to_email(
-            session, client, email, rules, bool(settings.get("dry_run", True)))
+        await rules_engine.apply_rules_to_email(session, client, email, rules)
     return email
 
 

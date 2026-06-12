@@ -74,3 +74,38 @@ def test_refuses_non_empty_target(migrate_module, populated_source, tmp_path):
 def test_missing_source_fails(migrate_module, tmp_path):
     assert migrate_module.migrate(str(tmp_path / "nope.db"),
                                   f"sqlite:///{tmp_path}/t.db", force=False) == 1
+
+
+def test_per_rule_dry_run_backfill_from_global_setting(tmp_path):
+    """Upgrading from the global-dry-run era: rules inherit the stored global
+    value (live stays live), and the retired settings rows are removed."""
+    import json
+
+    from alembic.config import Config as AlembicConfig
+    from sqlalchemy import create_engine, text
+
+    from alembic import command
+    from app.db import BACKEND_DIR
+
+    url = f"sqlite:///{tmp_path}/old.db"
+    cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "cdfd1c611254")  # last pre-per-rule revision
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO settings (key, value) VALUES ('dry_run', :v)"),
+            {"v": json.dumps(False)})  # global was LIVE
+        conn.execute(text(
+            "INSERT INTO rules (name, enabled, priority, match_min_confidence, "
+            "actions, stop_processing, created_at, updated_at) "
+            "VALUES ('r1', 1, 10, 0, '[]', 1, '2026-01-01', '2026-01-01')"))
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT dry_run FROM rules")).scalar() == 0  # live
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM settings WHERE key IN "
+            "('dry_run', 'dry_run_telegram_prefix')")).scalar() == 0

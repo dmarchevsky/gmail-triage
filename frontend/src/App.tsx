@@ -6,8 +6,7 @@ import {
   Route,
   Routes,
 } from "react-router-dom";
-import { ApiError, Settings, StatusResponse, get, post, put } from "./api";
-import { ConfirmDialog } from "./components";
+import { ApiError, Settings, StatusResponse, get, post } from "./api";
 import { ToastProvider } from "./toast";
 import Dashboard from "./pages/Dashboard";
 import Emails from "./pages/Emails";
@@ -67,50 +66,6 @@ function Login({ onLogin }: { onLogin: () => void }) {
   );
 }
 
-function DryRunToggle() {
-  const { status, refresh } = useApp();
-  const [confirming, setConfirming] = useState(false);
-  if (!status) return null;
-  const dryRun = status.dry_run;
-
-  const toggle = async () => {
-    await put("/dry-run", { enabled: !dryRun });
-    await refresh();
-  };
-
-  return (
-    <>
-      <button
-        className={`dry-run-toggle ${dryRun ? "on" : "off"}`}
-        title={dryRun ? "Dry-run is ON: no Gmail changes are made" : "LIVE: actions execute"}
-        onClick={() => (dryRun ? setConfirming(true) : toggle())}
-      >
-        {dryRun ? "DRY RUN" : "LIVE"}
-      </button>
-      {confirming && (
-        <ConfirmDialog
-          title="Disable dry-run?"
-          danger
-          confirmLabel="Go live"
-          message={
-            <p>
-              Turning dry-run <b>off</b> means rules will <b>really</b> modify your
-              Gmail: labels, mark-read, archive and trash actions will execute.
-              Previously planned (dry-run) actions are <b>not</b> executed
-              retroactively.
-            </p>
-          }
-          onConfirm={async () => {
-            setConfirming(false);
-            await toggle();
-          }}
-          onCancel={() => setConfirming(false)}
-        />
-      )}
-    </>
-  );
-}
-
 function SidebarStatus() {
   const { status } = useApp();
   if (!status) return null;
@@ -156,6 +111,7 @@ function SidebarStatus() {
         : "Poller",
     },
   ];
+  const rules = status.rules_mode;
   return (
     <div className="sidebar-status">
       {items.map((item) => (
@@ -164,6 +120,14 @@ function SidebarStatus() {
           <span className="label">{item.text}</span>
         </NavLink>
       ))}
+      <NavLink to="/rules" title="Rules execution mode">
+        <span
+          className={`status-dot ${rules.dry > 0 ? "warn" : rules.live > 0 ? "ok" : "neutral"}`}
+        />
+        <span className="label">
+          Rules: {rules.live} live · {rules.dry} dry
+        </span>
+      </NavLink>
     </div>
   );
 }
@@ -193,7 +157,6 @@ function Shell() {
         </nav>
         <div className="sidebar-foot">
           <SidebarStatus />
-          <DryRunToggle />
         </div>
       </aside>
       <main className="content">

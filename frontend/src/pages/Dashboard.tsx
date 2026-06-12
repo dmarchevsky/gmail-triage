@@ -51,10 +51,11 @@ export default function Dashboard() {
           </AsyncButton>
         </div>
       </header>
-      {status?.dry_run && (
+      {(status?.rules_mode.dry ?? 0) > 0 && (
         <p className="dry-run-banner">
-          Dry-run is <b>ON</b> — the pipeline runs fully, but no Gmail changes are
-          made and digests are not sent. Planned actions are recorded for review.
+          {status?.rules_mode.dry} rule(s) in <b>dry-run</b> — their actions are
+          recorded as planned but not executed. Graduate them to live one by one
+          from the Rules page.
         </p>
       )}
       {status?.poller.last_error && (

@@ -105,8 +105,10 @@ function RuleEditor({
     match_sender_pattern: rule?.match_sender_pattern ?? "",
     actions: (rule?.actions ?? []) as RuleAction[],
     stop_processing: rule?.stop_processing ?? true,
+    dry_run: rule?.dry_run ?? true,
   });
   const [confirmTrash, setConfirmTrash] = useState(false);
+  const [confirmLive, setConfirmLive] = useState(false);
 
   const doSave = async () => {
     const body = {
@@ -125,7 +127,9 @@ function RuleEditor({
   };
 
   const save = () => {
-    if (form.actions.some((a) => a.type === "trash")) setConfirmTrash(true);
+    const goingLive = !form.dry_run && (rule ? rule.dry_run : true);
+    if (goingLive) setConfirmLive(true);
+    else if (form.actions.some((a) => a.type === "trash")) setConfirmTrash(true);
     else doSave();
   };
 
@@ -204,6 +208,14 @@ function RuleEditor({
         <label className="checkbox">
           <input
             type="checkbox"
+            checked={form.dry_run}
+            onChange={(e) => setForm({ ...form, dry_run: e.target.checked })}
+          />
+          Dry-run — record planned actions without executing (uncheck to go live)
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
             checked={form.enabled}
             onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
           />
@@ -216,6 +228,25 @@ function RuleEditor({
           Save
         </button>
       </div>
+      {confirmLive && (
+        <ConfirmDialog
+          title="Switch this rule to LIVE?"
+          danger
+          confirmLabel="Go live"
+          message={
+            <p>
+              This rule's actions will <b>really modify your Gmail</b> from now on:
+              labels, mark-read, archive and trash will execute on matching emails.
+            </p>
+          }
+          onConfirm={() => {
+            setConfirmLive(false);
+            if (form.actions.some((a) => a.type === "trash")) setConfirmTrash(true);
+            else doSave();
+          }}
+          onCancel={() => setConfirmLive(false)}
+        />
+      )}
       {confirmTrash && (
         <ConfirmDialog
           title="This rule moves email to Trash"
@@ -273,12 +304,57 @@ function TestResults({ rule, onClose }: { rule: Rule; onClose: () => void }) {
   );
 }
 
+function ruleBody(rule: Rule, overrides: Partial<Rule>) {
+  return {
+    name: rule.name,
+    enabled: rule.enabled,
+    priority: rule.priority,
+    match_category_id: rule.match_category_id,
+    match_min_confidence: rule.match_min_confidence,
+    match_sender_pattern: rule.match_sender_pattern,
+    actions: rule.actions,
+    stop_processing: rule.stop_processing,
+    dry_run: rule.dry_run,
+    ...overrides,
+  };
+}
+
 export default function Rules() {
+  const toast = useToast();
   const [rules, setRules] = useState<Rule[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Rule | null | "new">(null);
   const [testing, setTesting] = useState<Rule | null>(null);
   const [deleting, setDeleting] = useState<Rule | null>(null);
+  const [goingLive, setGoingLive] = useState<Rule | null>(null);
+  const [offerApply, setOfferApply] = useState<Rule | null>(null);
+
+  const applyPlanned = async (rule: Rule) => {
+    try {
+      const r = await post<{ applied: number; failed: number; emails: number }>(
+        `/rules/${rule.id}/apply-planned`,
+      );
+      if (r.failed > 0)
+        toast.error(
+          `Applied ${r.applied} action(s); ${r.failed} failed — see email details`,
+        );
+      else toast.success(`Applied ${r.applied} planned action(s) on ${r.emails} email(s)`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+    await load();
+  };
+
+  const setMode = async (rule: Rule, dryRun: boolean) => {
+    try {
+      const updated = await put<Rule>(`/rules/${rule.id}`, ruleBody(rule, { dry_run: dryRun }));
+      toast.success(dryRun ? `“${rule.name}” back to dry-run` : `“${rule.name}” is LIVE`);
+      if (!dryRun && updated.pending_planned > 0) setOfferApply(updated);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+    await load();
+  };
 
   const load = useCallback(
     () => get<Rule[]>("/rules").then(setRules),
@@ -321,6 +397,7 @@ export default function Rules() {
             <th>Name</th>
             <th>Match</th>
             <th>Actions</th>
+            <th>Mode</th>
             <th>Flow</th>
             <th>Enabled</th>
             <th></th>
@@ -354,9 +431,30 @@ export default function Rules() {
                 )}
               </td>
               <td>{r.actions.map((a) => actionLabel(a.type)).join(", ")}</td>
+              <td>
+                {r.dry_run ? <Badge tone="dry">DRY RUN</Badge> : <Badge tone="ok">LIVE</Badge>}
+                {r.pending_planned > 0 && (
+                  <div className="sub">
+                    {r.pending_planned} planned
+                    {!r.dry_run && (
+                      <>
+                        {" · "}
+                        <button className="icon-btn" onClick={() => setOfferApply(r)}>
+                          Apply
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </td>
               <td>{r.stop_processing ? "stop" : "continue"}</td>
               <td>{r.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
               <td className="row-actions">
+                {r.dry_run ? (
+                  <button onClick={() => setGoingLive(r)}>Go live</button>
+                ) : (
+                  <button onClick={() => setMode(r, true)}>To dry-run</button>
+                )}
                 <button onClick={() => setTesting(r)}>Test</button>
                 <button onClick={() => setEditing(r)}>Edit</button>
                 <button className="danger" onClick={() => setDeleting(r)}>
@@ -367,9 +465,9 @@ export default function Rules() {
           ))}
           {rules.length === 0 && (
             <tr>
-              <td colSpan={7} className="sub">
+              <td colSpan={8} className="sub">
                 No rules — classified emails are recorded but nothing is changed in
-                Gmail.
+                Gmail. New rules start in dry-run.
               </td>
             </tr>
           )}
@@ -385,6 +483,45 @@ export default function Rules() {
         />
       )}
       {testing && <TestResults rule={testing} onClose={() => setTesting(null)} />}
+      {goingLive && (
+        <ConfirmDialog
+          title={`Switch “${goingLive.name}” to LIVE?`}
+          danger
+          confirmLabel="Go live"
+          message={
+            <p>
+              This rule's actions will <b>really modify your Gmail</b> from now on:
+              labels, mark-read, archive and trash will execute on matching emails.
+            </p>
+          }
+          onConfirm={async () => {
+            const rule = goingLive;
+            setGoingLive(null);
+            await setMode(rule, false);
+          }}
+          onCancel={() => setGoingLive(null)}
+        />
+      )}
+      {offerApply && (
+        <ConfirmDialog
+          title={`Apply ${offerApply.pending_planned} planned action(s)?`}
+          confirmLabel="Apply now"
+          message={
+            <p>
+              While “{offerApply.name}” was in dry-run it planned{" "}
+              <b>{offerApply.pending_planned}</b> action(s) on past emails. Apply
+              them to Gmail now? (Exactly the actions shown in each email's detail
+              view — nothing is re-evaluated.)
+            </p>
+          }
+          onConfirm={async () => {
+            const rule = offerApply;
+            setOfferApply(null);
+            await applyPlanned(rule);
+          }}
+          onCancel={() => setOfferApply(null)}
+        />
+      )}
       {deleting && (
         <ConfirmDialog
           title={`Delete rule “${deleting.name}”?`}

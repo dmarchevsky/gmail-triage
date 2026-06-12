@@ -1,11 +1,11 @@
 """GET /api/v1/status — component health. Public (docker healthcheck)."""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import GmailAuth
+from app.models import GmailAuth, Rule
 from app.services import settings_service
 from app.state import app_state
 
@@ -41,5 +41,10 @@ def get_status(session: Session = Depends(get_session)) -> dict:
             "last_error": app_state.poller_last_error,
             "paused": bool(settings_service.get_setting(session, "poller_paused")),
         },
-        "dry_run": bool(settings_service.get_setting(session, "dry_run")),
+        "rules_mode": {
+            "live": session.scalar(select(func.count(Rule.id)).where(
+                Rule.enabled.is_(True), Rule.dry_run.is_(False))) or 0,
+            "dry": session.scalar(select(func.count(Rule.id)).where(
+                Rule.enabled.is_(True), Rule.dry_run.is_(True))) or 0,
+        },
     }

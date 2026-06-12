@@ -113,7 +113,8 @@ def test_no_write_lock_held_during_digest_llm_calls(auth_client, db_session):
         return llm_response("Summary.")
 
     respx.post(CHAT_URL).mock(side_effect=llm_side_effect)
-    run = auth_client.post(f"/api/v1/digests/{digest['id']}/run-now").json()
+    run = auth_client.post(f"/api/v1/digests/{digest['id']}/run-now",
+                           json={"preview": True}).json()
     assert run["status"] == "dry_run"
     assert run["summary_text"] == "Summary."
 
@@ -143,9 +144,8 @@ def test_no_write_lock_held_during_gmail_action_calls(auth_client, db_session):
     full["payload"]["parts"] = [
         {"mimeType": "text/plain", "body": {"data": b64url("Body.")}}]
 
-    auth_client.put("/api/v1/dry-run", json={"enabled": False})
     auth_client.post("/api/v1/rules", json={
-        "name": "r", "match_category_id": cat["id"],
+        "name": "r", "match_category_id": cat["id"], "dry_run": False,
         "actions": [{"type": "add_label", "category_id": cat["id"]},
                     {"type": "archive"}]})
 

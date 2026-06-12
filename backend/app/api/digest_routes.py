@@ -110,11 +110,13 @@ def delete_digest(digest_id: int, session: Session = Depends(get_session)) -> di
 
 
 @router.post("/{digest_id}/run-now")
-async def run_now(digest_id: int, session: Session = Depends(get_session)) -> dict:
+async def run_now(digest_id: int, body: dict | None = None,
+                  session: Session = Depends(get_session)) -> dict:
     digest = session.get(Digest, digest_id)
     if digest is None:
         raise HTTPException(status_code=404, detail="Digest not found")
-    run = await run_digest(session, digest, actor="user")
+    preview = bool((body or {}).get("preview", False))
+    run = await run_digest(session, digest, actor="user", preview=preview)
     return serialize_run(run)
 
 

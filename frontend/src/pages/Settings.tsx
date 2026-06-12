@@ -281,14 +281,6 @@ export default function SettingsPage() {
             Send test message
           </AsyncButton>
         </div>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={settings.dry_run_telegram_prefix}
-            onChange={(e) => saveValues({ dry_run_telegram_prefix: e.target.checked })}
-          />
-          In dry-run, still send digests with a [DRY RUN] prefix (default: don't send)
-        </label>
       </div>
 
       <div className="settings-section">

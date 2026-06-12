@@ -137,10 +137,11 @@ def _render_message(digest: Digest, emails: list[Email], summary: str,
     return "\n\n".join(parts)
 
 
-async def run_digest(session: Session, digest: Digest, actor: str = "scheduler") -> DigestRun:
+async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
+                     preview: bool = False) -> DigestRun:
+    """preview=True renders the summary (status dry_run) without sending and
+    without consuming eligibility."""
     settings = settings_service.get_all_settings(session, redact=False)
-    dry_run = bool(settings.get("dry_run", True))
-    dry_run_prefix_send = bool(settings.get("dry_run_telegram_prefix", False))
 
     run = DigestRun(digest_id=digest.id, status=DigestRunStatus.running.value)
     session.add(run)
@@ -155,7 +156,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler")
 
         if not emails:
             run.status = DigestRunStatus.empty.value
-            if digest.send_no_news and not dry_run:
+            if digest.send_no_news and not preview:
                 token = settings.get("telegram_bot_token")
                 chat_id = digest.telegram_chat_id \
                     or settings.get("telegram_default_chat_id")
@@ -171,8 +172,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler")
         summary = await _summarize(session, digest, emails, settings)
         run.summary_text = summary
 
-        will_send = (not dry_run) or dry_run_prefix_send
-        if not will_send:
+        if preview:
             run.status = DigestRunStatus.dry_run.value
         else:
             token = settings.get("telegram_bot_token")
@@ -180,14 +180,11 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler")
             if not token or not chat_id:
                 raise telegram.TelegramError(
                     "Telegram bot token / chat id not configured")
-            message = _render_message(digest, emails, summary,
-                                      dry_run_prefix=dry_run and dry_run_prefix_send)
+            message = _render_message(digest, emails, summary, dry_run_prefix=False)
             ids = await telegram.send_message(token, str(chat_id), message)
             run.telegram_message_id = ",".join(ids)
             app_state.telegram_status = "ok"
-            # A dry-run prefixed send must NOT consume eligibility.
-            run.status = (DigestRunStatus.dry_run.value if dry_run
-                          else DigestRunStatus.success.value)
+            run.status = DigestRunStatus.success.value
     except (llm.LLMError, telegram.TelegramError, GmailAuthError,
             gmail.GmailError) as e:
         run.status = DigestRunStatus.error.value

@@ -31,8 +31,9 @@ export default function Wizard() {
             send Telegram digests.
           </p>
           <p>
-            <b>Dry-run is ON by default</b> and stays on until you disable it: nothing
-            in your Gmail is changed until you've reviewed what <i>would</i> happen.
+            <b>New rules start in dry-run</b>: their actions are recorded as planned,
+            but nothing in your Gmail changes until you switch each rule to live —
+            one by one, once you've reviewed what it <i>would</i> do.
           </p>
           <p>
             MailTriage can never send email — it requests the read/organize scope
@@ -126,9 +127,9 @@ export default function Wizard() {
       body: (
         <>
           <p>
-            MailTriage starts polling and classifying in <b>dry-run</b>: review the
-            Emails page to see classifications and planned actions, add Rules, then
-            disable dry-run from the sidebar when you're confident.
+            MailTriage starts polling and classifying now. Add rules (they start in
+            dry-run), review their planned actions on the Emails page, then graduate
+            each rule to live from the Rules page when you're confident.
           </p>
         </>
       ),
