@@ -85,6 +85,7 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
                 except gmail.GmailError as e:
                     log.warning("digest_body_fetch_failed", email_id=email.id,
                                 error=str(e))
+            session.commit()  # release any body-hash write before the LLM await
             user = (f"From: {email.sender}\nSubject: {email.subject}\n"
                     f"Date: {email.received_at}\n\n"
                     f"{(body or email.snippet or '')[:body_budget]}")
@@ -148,6 +149,9 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler")
     try:
         emails = eligible_emails(session, digest)
         run.email_ids = [e.id for e in emails]
+        # Commit before the (potentially minutes-long) summarization so no
+        # dirty state can autoflush into a held SQLite write transaction.
+        session.commit()
 
         if not emails:
             run.status = DigestRunStatus.empty.value

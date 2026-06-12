@@ -113,70 +113,78 @@ async def _label_name_for_action(session: Session, action: dict) -> str | None:
 async def apply_rules_to_email(session: Session, client: GmailClient | None,
                                email: Email, rules: list[Rule], dry_run: bool) -> int:
     """Evaluate rules, persist EmailAction rows; execute against Gmail unless
-    dry_run. Returns number of planned actions."""
+    dry_run. Returns number of planned actions.
+
+    All Gmail awaits happen with a clean session, and all DB mutations land in
+    one short transaction at the end — SQLite has a single writer, so holding
+    a write transaction across network calls starves UI writes.
+    """
     planned = evaluate_rules(rules, email)
     if not planned:
         return 0
 
-    email.dry_run = dry_run
-    add_ids: list[str] = []
-    remove_ids: list[str] = []
-    trash = False
-    action_rows: list[EmailAction] = []
-    labels = LabelManager(client) if client is not None else None
+    # Phase 1: resolve everything (reads only; session stays clean).
+    label_names: list[str | None] = []
+    for _rule, action in planned:
+        if ActionType(action["type"]) in (ActionType.add_label, ActionType.remove_label):
+            label_names.append(await _label_name_for_action(session, action))
+        else:
+            label_names.append(None)
 
-    for rule, action in planned:
-        row = EmailAction(email_id=email.id, rule_id=rule.id,
-                          action_type=action["type"], action_params=action,
-                          executed=False, dry_run=dry_run)
-        session.add(row)
-        action_rows.append(row)
-        if dry_run:
-            continue
-        atype = ActionType(action["type"])
-        if atype == ActionType.add_label:
-            name = await _label_name_for_action(session, action)
-            if name and labels:
-                add_ids.append(await labels.get_id(name))
-        elif atype == ActionType.remove_label:
-            if action.get("label_name") and labels:
-                remove_ids.append(await labels.get_id(action["label_name"]))
-        elif atype == ActionType.mark_read:
-            remove_ids.append("UNREAD")
-        elif atype == ActionType.archive:
-            remove_ids.append("INBOX")
-        elif atype == ActionType.trash:
-            trash = True
-
+    # Phase 2 (live only): execute against Gmail before touching the session.
+    executed = dry_run is False
+    exec_error: str | None = None
     if not dry_run and client is not None:
+        add_ids: list[str] = []
+        remove_ids: list[str] = []
+        trash = False
+        labels = LabelManager(client)
         try:
+            for (_rule, action), name in zip(planned, label_names, strict=True):
+                atype = ActionType(action["type"])
+                if atype == ActionType.add_label and name:
+                    add_ids.append(await labels.get_id(name))
+                elif atype == ActionType.remove_label and name:
+                    remove_ids.append(await labels.get_id(name))
+                elif atype == ActionType.mark_read:
+                    remove_ids.append("UNREAD")
+                elif atype == ActionType.archive:
+                    remove_ids.append("INBOX")
+                elif atype == ActionType.trash:
+                    trash = True
             if add_ids or remove_ids:
                 await client.modify_message(email.gmail_message_id,
                                             add_label_ids=sorted(set(add_ids)),
                                             remove_label_ids=sorted(set(remove_ids)))
             if trash:
                 await client.trash_message(email.gmail_message_id)
-            now = datetime.now(UTC)
-            for row in action_rows:
-                row.executed = True
-                row.executed_at = now
         except Exception as e:
-            for row in action_rows:
-                if not row.executed:
-                    row.error = str(e)[:500]
-            email.error = f"action execution failed: {str(e)[:300]}"
+            executed = False
+            exec_error = str(e)[:500]
             log.error("action_execution_failed", email_id=email.id, error=str(e))
-            audit(session, "system", "actions_failed",
-                  {"email_id": email.id, "error": str(e)[:300]})
-            session.commit()
-            return len(planned)
 
-    email.status = EmailStatus.actioned.value
-    audit(session, "system", "actions_planned" if dry_run else "actions_executed", {
-        "email_id": email.id,
-        "actions": [a["type"] for _, a in planned],
-        "dry_run": dry_run,
-    })
+    # Phase 3: persist the outcome in one short transaction.
+    now = datetime.now(UTC)
+    email.dry_run = dry_run
+    for _rule, action in planned:
+        session.add(EmailAction(
+            email_id=email.id, rule_id=_rule.id,
+            action_type=action["type"], action_params=action,
+            executed=executed, dry_run=dry_run,
+            executed_at=now if executed else None,
+            error=exec_error))
+    if exec_error is not None:
+        email.error = f"action execution failed: {exec_error[:300]}"
+        audit(session, "system", "actions_failed",
+              {"email_id": email.id, "error": exec_error[:300]})
+    else:
+        email.status = EmailStatus.actioned.value
+        audit(session, "system",
+              "actions_planned" if dry_run else "actions_executed", {
+                  "email_id": email.id,
+                  "actions": [a["type"] for _, a in planned],
+                  "dry_run": dry_run,
+              })
     session.commit()
     return len(planned)
 

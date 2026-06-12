@@ -4,10 +4,11 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from app.api import (
     admin_routes,
@@ -75,6 +76,18 @@ def create_app() -> FastAPI:
     app = FastAPI(title="MailTriage", version="0.1.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url="/api/v1/openapi.json")
     app.add_middleware(AuthMiddleware)
+
+    @app.exception_handler(OperationalError)
+    async def handle_db_busy(request: Request, exc: OperationalError):
+        log.error("database_error", path=request.url.path, error=str(exc.orig or exc))
+        return JSONResponse(status_code=503, content={
+            "detail": "Database is busy, please retry in a moment"})
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected(request: Request, exc: Exception):
+        log.error("unhandled_exception", path=request.url.path,
+                  error=f"{type(exc).__name__}: {exc}", exc_info=True)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     api_prefix = "/api/v1"
     app.include_router(status.router, prefix=api_prefix)

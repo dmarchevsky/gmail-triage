@@ -67,6 +67,7 @@ async def fetch_body(session: Session, client: GmailClient, email: Email) -> str
 async def classify_email(session: Session, client: GmailClient, email: Email,
                          categories: list[Category], settings: dict) -> None:
     body = await fetch_body(session, client, email)
+    session.commit()  # release the body-hash write before the LLM await
     system, user, schema = build_classification_prompt(
         categories, email, body, int(settings["classify_body_max_chars"]))
     try:

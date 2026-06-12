@@ -23,7 +23,10 @@ def get_engine():
         url = cfg.sqlalchemy_url
         if url.startswith("sqlite"):
             cfg.data_dir.mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(url, connect_args={"check_same_thread": False}
+        # timeout = SQLite busy timeout: writers wait instead of failing with
+        # "database is locked" when another writer briefly holds the lock.
+        _engine = create_engine(url, connect_args={"check_same_thread": False,
+                                                   "timeout": 30}
                                 if url.startswith("sqlite") else {})
         if url.startswith("sqlite"):
             @event.listens_for(_engine, "connect")
