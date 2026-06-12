@@ -4,12 +4,12 @@ import {
   AsyncButton,
   Badge,
   ConfirmDialog,
-  ErrorNote,
   Modal,
   fmtDate,
   pct,
 } from "../components";
 import { useApp } from "../App";
+import { useToast } from "../toast";
 
 interface DigestForm {
   name: string;
@@ -36,6 +36,7 @@ function DigestEditor({
   onSaved: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
   const [form, setForm] = useState<DigestForm>({
     name: digest?.name ?? "",
     enabled: digest?.enabled ?? true,
@@ -50,8 +51,6 @@ function DigestEditor({
     max_emails: digest?.max_emails ?? 50,
     send_no_news: digest?.send_no_news ?? false,
   });
-  const [error, setError] = useState<string | null>(null);
-
   const toggleCategory = (id: number) =>
     setForm({
       ...form,
@@ -61,7 +60,6 @@ function DigestEditor({
     });
 
   const save = async () => {
-    setError(null);
     const body = {
       ...form,
       telegram_chat_id: form.telegram_chat_id || null,
@@ -73,10 +71,11 @@ function DigestEditor({
     try {
       if (digest) await put(`/digests/${digest.id}`, body);
       else await post("/digests", body);
+      toast.success(digest ? "Digest updated" : "Digest created");
       onSaved();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -181,7 +180,6 @@ function DigestEditor({
           Enabled (scheduled)
         </label>
       </div>
-      <ErrorNote error={error} />
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
         <button className="primary" onClick={save}>
@@ -225,7 +223,7 @@ export default function Digests() {
   const [editing, setEditing] = useState<Digest | null | "new">(null);
   const [history, setHistory] = useState<Digest | null>(null);
   const [deleting, setDeleting] = useState<Digest | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const toast = useToast();
 
   const load = useCallback(() => get<Digest[]>("/digests").then(setDigests), []);
   useEffect(() => {
@@ -250,7 +248,6 @@ export default function Digests() {
           Telegram.
         </p>
       )}
-      {note && <p className="note">{note}</p>}
 
       <table className="table">
         <thead>
@@ -278,17 +275,17 @@ export default function Digests() {
               <td className="row-actions">
                 <AsyncButton
                   onClick={async () => {
-                    setNote(null);
                     const r = await post<DigestRun>(`/digests/${d.id}/run-now`);
-                    setNote(
+                    const message =
                       r.status === "dry_run"
                         ? `Dry-run rendered (${r.email_ids.length} emails) — see Runs`
                         : r.status === "empty"
                           ? "No eligible emails."
                           : r.status === "success"
-                            ? `Sent (${r.email_ids.length} emails) ✓`
-                            : `Run ${r.status}: ${r.error ?? ""}`,
-                    );
+                            ? `Sent (${r.email_ids.length} emails)`
+                            : `Run ${r.status}: ${r.error ?? ""}`;
+                    if (r.status === "error") toast.error(message);
+                    else toast.success(message);
                   }}
                 >
                   Run now

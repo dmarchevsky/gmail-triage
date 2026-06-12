@@ -31,6 +31,7 @@ def oauth_start(body: OAuthStartBody, request: Request,
     if body.client_secret_json:
         settings_service.set_setting(session, "gmail_client_secret_json",
                                      body.client_secret_json)
+        session.commit()
     client_secret = body.client_secret_json or settings_service.get_setting(
         session, "gmail_client_secret_json")
     if not client_secret:

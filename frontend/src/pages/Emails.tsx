@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { Category, EmailList, EmailRow, get, post } from "../api";
-import { Badge, ErrorNote, Modal, fmtDate, pct } from "../components";
+import { AsyncButton, Badge, Modal, actionLabel, fmtDate, pct } from "../components";
+import { useToast } from "../toast";
 
 function statusTone(status: string): "ok" | "warn" | "error" | "neutral" {
   if (status === "actioned" || status === "classified") return "ok";
   if (status === "error") return "error";
   if (status === "pending") return "warn";
   return "neutral";
+}
+
+function reclassifySummary(email: EmailRow): string {
+  const category = email.classification ?? "none";
+  if (email.actions.length === 0)
+    return `Re-classified as ${category} — no rule matched`;
+  const planned = email.actions.some((a) => a.dry_run && !a.executed);
+  const labels = email.actions.map((a) => actionLabel(a.action_type)).join(", ");
+  return `Re-classified as ${category} — ${planned ? "planned" : "executed"}: ${labels}`;
 }
 
 function FeedbackForm({
@@ -18,9 +28,9 @@ function FeedbackForm({
   categories: Category[];
   onDone: () => void;
 }) {
+  const toast = useToast();
   const [categoryId, setCategoryId] = useState<string>("none");
   const [note, setNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="feedback-form">
@@ -41,19 +51,18 @@ function FeedbackForm({
         value={note}
         onChange={(e) => setNote(e.target.value)}
       />
-      <ErrorNote error={error} />
       <button
         className="primary"
         onClick={async () => {
-          setError(null);
           try {
             await post(`/emails/${email.id}/feedback`, {
               correct_category_id: categoryId === "none" ? null : Number(categoryId),
               user_note: note || null,
             });
+            toast.success("Feedback recorded — see the Feedback page for proposals");
             onDone();
           } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            toast.error(e instanceof Error ? e.message : String(e));
           }
         }}
       >
@@ -66,12 +75,15 @@ function FeedbackForm({
 function EmailDetail({
   emailId,
   categories,
+  onChanged,
   onClose,
 }: {
   emailId: number;
   categories: Category[];
+  onChanged: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
   const [email, setEmail] = useState<EmailRow | null>(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
 
@@ -106,7 +118,7 @@ function EmailDetail({
         <ul className="action-list">
           {email.actions.map((a) => (
             <li key={a.id}>
-              <code>{a.action_type}</code>{" "}
+              <code>{actionLabel(a.action_type)}</code>{" "}
               {a.action_params?.label_name ? `→ ${a.action_params.label_name}` : ""}
               {a.executed ? (
                 <Badge tone="ok">executed {fmtDate(a.executed_at)}</Badge>
@@ -119,9 +131,22 @@ function EmailDetail({
           ))}
         </ul>
 
-        {feedbackSent ? (
-          <p className="note">Feedback recorded — see the Feedback page for proposals.</p>
-        ) : (
+        <AsyncButton
+          onClick={async () => {
+            try {
+              const updated = await post<EmailRow>(`/emails/${email.id}/reclassify`);
+              setEmail(updated);
+              toast.success(reclassifySummary(updated));
+              onChanged();
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        >
+          ↻ Re-run classification &amp; rules
+        </AsyncButton>
+
+        {!feedbackSent && (
           <FeedbackForm
             email={email}
             categories={categories}
@@ -134,6 +159,7 @@ function EmailDetail({
 }
 
 export default function Emails() {
+  const toast = useToast();
   const [list, setList] = useState<EmailList | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [open, setOpen] = useState<number | null>(null);
@@ -246,6 +272,7 @@ export default function Emails() {
             <th>Conf.</th>
             <th>Status</th>
             <th>Actions</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -260,12 +287,28 @@ export default function Emails() {
                 <Badge tone={statusTone(e.status)}>{e.status}</Badge>{" "}
                 {e.dry_run && e.actions.length > 0 && <Badge tone="dry">dry</Badge>}
               </td>
-              <td>{e.actions.map((a) => a.action_type).join(", ") || "—"}</td>
+              <td>{e.actions.map((a) => actionLabel(a.action_type)).join(", ") || "—"}</td>
+              <td onClick={(ev) => ev.stopPropagation()}>
+                <AsyncButton
+                  className="icon-btn"
+                  onClick={async () => {
+                    try {
+                      const updated = await post<EmailRow>(`/emails/${e.id}/reclassify`);
+                      toast.success(reclassifySummary(updated));
+                      await load();
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : String(err));
+                    }
+                  }}
+                >
+                  ↻
+                </AsyncButton>
+              </td>
             </tr>
           ))}
           {list && list.items.length === 0 && (
             <tr>
-              <td colSpan={7} className="sub">
+              <td colSpan={8} className="sub">
                 No emails match.
               </td>
             </tr>
@@ -286,7 +329,12 @@ export default function Emails() {
       </div>
 
       {open !== null && (
-        <EmailDetail emailId={open} categories={categories} onClose={() => setOpen(null)} />
+        <EmailDetail
+          emailId={open}
+          categories={categories}
+          onChanged={load}
+          onClose={() => setOpen(null)}
+        />
       )}
     </div>
   );

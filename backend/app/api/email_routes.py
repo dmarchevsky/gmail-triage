@@ -100,6 +100,62 @@ def get_email(email_id: int, session: Session = Depends(get_session)) -> dict:
     return serialize_email(email, detail=True)
 
 
+@router.post("/emails/{email_id}/reclassify")
+async def reclassify_email(email_id: int,
+                           session: Session = Depends(get_session)) -> dict:
+    """Re-run classification + rules for one email against current criteria.
+    Stale dry-run plans are discarded; executed actions are kept as history."""
+    from sqlalchemy import delete
+
+    from app.models import EmailStatus
+    from app.services import classifier, llm, settings_service
+    from app.services import rules as rules_engine
+    from app.services.gmail import GmailAuthError, GmailClient
+
+    email = session.get(Email, email_id)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    settings = settings_service.get_all_settings(session, redact=False)
+    client_secret = settings.get("gmail_client_secret_json")
+    if not client_secret:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+
+    session.execute(delete(EmailAction).where(
+        EmailAction.email_id == email_id,
+        EmailAction.dry_run.is_(True),
+        EmailAction.executed.is_(False)))
+    email.classification_id = None
+    email.confidence = None
+    email.rationale = None
+    email.error = None
+    email.classified_at = None
+    email.status = EmailStatus.pending.value
+    session.commit()
+
+    categories = list(session.scalars(
+        select(Category).where(Category.enabled.is_(True)).order_by(Category.id)))
+    rules = rules_engine.load_enabled_rules(session)
+    try:
+        client = GmailClient(session, client_secret)
+    except GmailAuthError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    try:
+        await classifier.classify_one(session, client, email, categories,
+                                      rules, settings)
+    except llm.LLMUnavailable as e:
+        raise HTTPException(status_code=503,
+                            detail=f"LLM unreachable; email left pending: {e}") from e
+    finally:
+        await client.aclose()
+
+    session.expire(email)
+    refreshed = session.get(Email, email_id,
+                            options=[joinedload(Email.classification),
+                                     joinedload(Email.actions)])
+    return serialize_email(refreshed, detail=True)
+
+
 @router.get("/stats")
 def stats(session: Session = Depends(get_session)) -> dict:
     now = datetime.now(UTC)

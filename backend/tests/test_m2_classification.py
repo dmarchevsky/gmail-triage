@@ -234,3 +234,77 @@ def test_llm_health_endpoint(auth_client):
     resp = auth_client.post("/api/v1/llm/test")
     assert resp.json()["ok"] is True
     assert resp.json()["models"] == ["qwen"]
+
+
+# ── per-email reclassify ─────────────────────────────────────────────────────
+
+@respx.mock
+def test_reclassify_single_email(auth_client, db_session, seeded):
+    mock_gmail_full(seeded)
+    chat = respx.post(CHAT_URL)
+    chat.side_effect = [
+        llm_response({"category": "MarketNews", "confidence": 0.9, "rationale": "v1"}),
+        llm_response({"category": "Receipts", "confidence": 0.7, "rationale": "v2"}),
+    ]
+    # Rule plans a dry-run action on first classification.
+    auth_client.post("/api/v1/rules", json={
+        "name": "label market", "match_category_id": 1,
+        "actions": [{"type": "mark_read"}]})
+    auth_client.post("/api/v1/classify/run-now")
+
+    from app.models import Email, EmailAction
+    email = db_session.query(Email).one()
+    assert email.rationale == "v1"
+    assert db_session.query(EmailAction).count() == 1  # stale dry-run plan
+
+    resp = auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
+    assert resp.status_code == 200
+    detail = resp.json()
+    assert detail["classification"] == "Receipts"
+    assert detail["rationale"] == "v2"
+
+    db_session.expire_all()
+    email = db_session.query(Email).one()
+    assert email.confidence == 0.7
+    # Old unexecuted dry-run plan replaced; rule no longer matches Receipts.
+    assert db_session.query(EmailAction).count() == 0
+    assert email.status == "classified"
+
+
+@respx.mock
+def test_reclassify_keeps_executed_action_history(auth_client, db_session, seeded):
+    from datetime import UTC, datetime
+
+    from app.models import Email, EmailAction
+    email = db_session.query(Email).one()
+    db_session.add(EmailAction(email_id=email.id, action_type="archive",
+                               executed=True, dry_run=False,
+                               executed_at=datetime.now(UTC)))
+    db_session.commit()
+
+    mock_gmail_full(seeded)
+    respx.post(CHAT_URL).mock(return_value=llm_response(
+        {"category": "none", "confidence": 0.5, "rationale": "r"}))
+    auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
+
+    db_session.expire_all()
+    kept = db_session.query(EmailAction).all()
+    assert len(kept) == 1 and kept[0].executed  # history preserved
+
+
+@respx.mock
+def test_reclassify_llm_down_503(auth_client, db_session, seeded):
+    import httpx
+
+    mock_gmail_full(seeded)
+    respx.post(CHAT_URL).mock(side_effect=httpx.ConnectError("refused"))
+    from app.models import Email
+    email = db_session.query(Email).one()
+    resp = auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
+    assert resp.status_code == 503
+    db_session.expire_all()
+    assert db_session.query(Email).one().status == "pending"
+
+
+def test_reclassify_unknown_email_404(auth_client, connected):
+    assert auth_client.post("/api/v1/emails/9999/reclassify").status_code == 404

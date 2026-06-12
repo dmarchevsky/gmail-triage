@@ -54,6 +54,7 @@ def create_rule(body: RuleIn, session: Session = Depends(get_session)) -> dict:
     session.add(rule)
     session.flush()
     audit(session, "user", "rule_created", {"id": rule.id, "name": rule.name})
+    session.commit()
     return serialize(rule)
 
 
@@ -66,6 +67,7 @@ def update_rule(rule_id: int, body: RuleIn,
     for key, value in body.model_dump().items():
         setattr(rule, key, value)
     audit(session, "user", "rule_updated", {"id": rule.id})
+    session.commit()
     return serialize(rule)
 
 
@@ -76,6 +78,7 @@ def delete_rule(rule_id: int, session: Session = Depends(get_session)) -> dict:
         raise HTTPException(status_code=404, detail="Rule not found")
     audit(session, "user", "rule_deleted", {"id": rule.id, "name": rule.name})
     session.delete(rule)
+    session.commit()
     return {"deleted": rule_id}
 
 
@@ -92,6 +95,7 @@ def reorder(body: ReorderBody, session: Session = Depends(get_session)) -> list[
     for position, rule_id in enumerate(body.ordered_ids):
         rules[rule_id].priority = (position + 1) * 10
     audit(session, "user", "rules_reordered", {"order": body.ordered_ids})
+    session.commit()
     return [serialize(r) for r in
             sorted(rules.values(), key=lambda r: (r.priority, r.id))]
 

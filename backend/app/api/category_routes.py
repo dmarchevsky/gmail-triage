@@ -59,6 +59,7 @@ def create_category(body: CategoryIn, session: Session = Depends(get_session)) -
     session.flush()
     _record_history(session, category, CriteriaSource.user.value)
     audit(session, "user", "category_created", {"id": category.id, "name": category.name})
+    session.commit()
     return serialize(category)
 
 
@@ -84,6 +85,7 @@ def update_category(category_id: int, body: CategoryIn,
         _record_history(session, category, CriteriaSource.user.value)
     audit(session, "user", "category_updated",
           {"id": category.id, "criteria_changed": criteria_changed})
+    session.commit()
     return serialize(category)
 
 
@@ -94,6 +96,7 @@ def delete_category(category_id: int, session: Session = Depends(get_session)) -
         raise HTTPException(status_code=404, detail="Category not found")
     audit(session, "user", "category_deleted", {"id": category.id, "name": category.name})
     session.delete(category)
+    session.commit()
     return {"deleted": category_id}
 
 

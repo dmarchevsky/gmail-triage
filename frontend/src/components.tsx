@@ -1,5 +1,15 @@
 import { ReactNode, useEffect, useState } from "react";
 
+export const ACTION_LABELS: Record<string, string> = {
+  add_label: "Add label",
+  remove_label: "Remove label",
+  mark_read: "Mark read",
+  archive: "Archive",
+  trash: "Trash",
+};
+
+export const actionLabel = (type: string): string => ACTION_LABELS[type] ?? type;
+
 export function Badge({
   children,
   tone = "neutral",

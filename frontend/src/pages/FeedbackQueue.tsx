@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Category, FeedbackItem, get, post } from "../api";
-import { AsyncButton, Badge, DiffView, ErrorNote, Modal, fmtDate } from "../components";
+import { AsyncButton, Badge, DiffView, Modal, fmtDate } from "../components";
+import { useToast } from "../toast";
 
 function ProposalReview({
   item,
@@ -13,9 +14,9 @@ function ProposalReview({
   onDone: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [edited, setEdited] = useState(item.proposed_criteria_md ?? "");
-  const [error, setError] = useState<string | null>(null);
 
   const targetCategory = categories.find(
     (c) =>
@@ -25,13 +26,13 @@ function ProposalReview({
   );
 
   const act = async (path: string, body?: unknown) => {
-    setError(null);
     try {
       await post(`/feedback/${item.id}/${path}`, body);
+      toast.success(path === "reject" ? "Proposal rejected" : "Criteria updated");
       onDone();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -63,7 +64,6 @@ function ProposalReview({
           newText={item.proposed_criteria_md ?? ""}
         />
       )}
-      <ErrorNote error={error} />
       <div className="modal-actions">
         <button onClick={() => act("reject")}>Reject</button>
         {editing ? (
@@ -87,7 +87,7 @@ export default function FeedbackQueue() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [reviewing, setReviewing] = useState<FeedbackItem | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const toast = useToast();
 
   const load = useCallback(async () => {
     setItems(await get<FeedbackItem[]>("/feedback?status=open"));
@@ -109,7 +109,6 @@ export default function FeedbackQueue() {
         affected category's criteria (debounced ~1 min). Nothing changes without your
         approval.
       </p>
-      {note && <p className="note">{note}</p>}
 
       <table className="table">
         <thead>
@@ -152,12 +151,11 @@ export default function FeedbackQueue() {
                 ) : (
                   <AsyncButton
                     onClick={async () => {
-                      setNote(null);
                       try {
                         await post(`/feedback/${f.id}/generate-proposal`);
-                        setNote("Proposal generated.");
+                        toast.success("Proposal generated");
                       } catch (e) {
-                        setNote(
+                        toast.error(
                           `Generation failed: ${e instanceof Error ? e.message : e}`,
                         );
                       }
@@ -192,10 +190,7 @@ export default function FeedbackQueue() {
         <ProposalReview
           item={reviewing}
           categories={categories}
-          onDone={() => {
-            setNote("Done.");
-            load();
-          }}
+          onDone={load}
           onClose={() => setReviewing(null)}
         />
       )}

@@ -93,6 +93,46 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
     email.error = None
 
 
+async def classify_one(session: Session, client: GmailClient, email: Email,
+                       categories: list[Category], rules: list,
+                       settings: dict) -> Email:
+    """Classify a single email (ignore list → hard rules → LLM), then run the
+    rule engine. Raises llm.LLMUnavailable; leaves status pending when there
+    is nothing to classify against."""
+    from app.services import rules as rules_engine
+
+    if sender_matches(settings.get("ignore_senders") or [], email.sender or ""):
+        email.status = EmailStatus.skipped.value
+        session.commit()
+        return email
+
+    hard = next((r for r in rules if rules_engine.is_hard_rule(r)
+                 and sender_matches([r.match_sender_pattern], email.sender or "")),
+                None)
+    if hard is not None:
+        # Deterministic pre-filter: bypass the LLM entirely (§4.2.1).
+        email.confidence = 1.0
+        email.rationale = f"hard rule: {hard.name}"
+        email.classified_at = datetime.now(UTC)
+        email.status = EmailStatus.classified.value
+    else:
+        if not categories:
+            return email  # nothing to classify against; stays pending
+        try:
+            await classify_email(session, client, email, categories, settings)
+        except llm.LLMUnavailable:
+            session.commit()
+            raise
+    session.commit()
+    log.info("email_classified", email_id=email.id, status=email.status,
+             category_id=email.classification_id, confidence=email.confidence)
+
+    if email.status == EmailStatus.classified.value and rules:
+        await rules_engine.apply_rules_to_email(
+            session, client, email, rules, bool(settings.get("dry_run", True)))
+    return email
+
+
 async def classify_pending(session: Session, limit: int = 50) -> dict:
     """Classify up to `limit` pending emails, then run the rule engine on each.
     LLM-unreachable stops the batch and leaves the remainder pending (§10.7)."""
@@ -108,10 +148,7 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
         return {"classified": 0, "skipped": 0, "errors": 0, "actioned": 0,
                 "pending_left": 0}
 
-    ignore_patterns = settings.get("ignore_senders") or []
-    dry_run = bool(settings.get("dry_run", True))
     all_rules = rules_engine.load_enabled_rules(session)
-    hard_rules = [r for r in all_rules if rules_engine.is_hard_rule(r)]
     counts = {"classified": 0, "skipped": 0, "errors": 0, "actioned": 0}
 
     client_secret = settings.get("gmail_client_secret_json")
@@ -120,41 +157,21 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
     client = GmailClient(session, client_secret)
     try:
         for email in pending:
-            if sender_matches(ignore_patterns, email.sender or ""):
-                email.status = EmailStatus.skipped.value
+            try:
+                await classify_one(session, client, email, categories,
+                                   all_rules, settings)
+            except llm.LLMUnavailable as e:
+                log.warning("llm_unreachable_batch_stopped", error=str(e))
+                break
+            if email.status == EmailStatus.pending.value:
+                break  # no categories to classify against; leave the rest
+            if email.status == EmailStatus.skipped.value:
                 counts["skipped"] += 1
-                session.commit()
-                continue
-
-            hard = next((r for r in hard_rules
-                         if sender_matches([r.match_sender_pattern], email.sender or "")),
-                        None)
-            if hard is not None:
-                # Deterministic pre-filter: bypass the LLM entirely (§4.2.1).
-                email.confidence = 1.0
-                email.rationale = f"hard rule: {hard.name}"
-                email.classified_at = datetime.now(UTC)
-                email.status = EmailStatus.classified.value
+            elif email.status == EmailStatus.error.value:
+                counts["errors"] += 1
             else:
-                if not categories:
-                    break  # nothing to classify against; leave pending
-                try:
-                    await classify_email(session, client, email, categories, settings)
-                except llm.LLMUnavailable as e:
-                    log.warning("llm_unreachable_batch_stopped", error=str(e))
-                    session.commit()
-                    break
-
-            counts["classified" if email.status == EmailStatus.classified.value
-                   else "errors"] += 1
-            session.commit()
-            log.info("email_classified", email_id=email.id, status=email.status,
-                     category_id=email.classification_id, confidence=email.confidence)
-
-            if email.status == EmailStatus.classified.value and all_rules:
-                acted = await rules_engine.apply_rules_to_email(
-                    session, client, email, all_rules, dry_run)
-                if acted:
+                counts["classified"] += 1
+                if email.status == EmailStatus.actioned.value:
                     counts["actioned"] += 1
     finally:
         await client.aclose()

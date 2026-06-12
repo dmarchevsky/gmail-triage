@@ -16,10 +16,12 @@ def client(tmp_path, monkeypatch):
     """TestClient with a fresh SQLite DB per test."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     from app import auth, config, db
+    from app.state import AppState, app_state
 
     config.get_config.cache_clear()
     db.reset_engine_for_tests()
     auth._login_attempts.clear()
+    app_state.__dict__.update(AppState().__dict__)  # reset module-global state
 
     from fastapi.testclient import TestClient
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Category, Rule, RuleAction, del, get, post, put } from "../api";
-import { Badge, ConfirmDialog, ErrorNote, Modal, pct } from "../components";
+import { Badge, ConfirmDialog, Modal, actionLabel, pct } from "../components";
+import { useToast } from "../toast";
 
 const ACTION_TYPES: RuleAction["type"][] = [
   "add_label",
@@ -38,7 +39,7 @@ function ActionBuilder({
           >
             {ACTION_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {actionLabel(t)}
               </option>
             ))}
           </select>
@@ -94,6 +95,7 @@ function RuleEditor({
   onSaved: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
   const [form, setForm] = useState({
     name: rule?.name ?? "",
     enabled: rule?.enabled ?? true,
@@ -104,11 +106,9 @@ function RuleEditor({
     actions: (rule?.actions ?? []) as RuleAction[],
     stop_processing: rule?.stop_processing ?? true,
   });
-  const [error, setError] = useState<string | null>(null);
   const [confirmTrash, setConfirmTrash] = useState(false);
 
   const doSave = async () => {
-    setError(null);
     const body = {
       ...form,
       match_sender_pattern: form.match_sender_pattern || null,
@@ -116,10 +116,11 @@ function RuleEditor({
     try {
       if (rule) await put(`/rules/${rule.id}`, body);
       else await post("/rules", body);
+      toast.success(rule ? "Rule updated" : "Rule created");
       onSaved();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -209,7 +210,6 @@ function RuleEditor({
           Enabled
         </label>
       </div>
-      <ErrorNote error={error} />
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
         <button className="primary" onClick={save}>
@@ -353,7 +353,7 @@ export default function Rules() {
                   </div>
                 )}
               </td>
-              <td>{r.actions.map((a) => a.type).join(", ")}</td>
+              <td>{r.actions.map((a) => actionLabel(a.type)).join(", ")}</td>
               <td>{r.stop_processing ? "stop" : "continue"}</td>
               <td>{r.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
               <td className="row-actions">

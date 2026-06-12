@@ -131,6 +131,10 @@ code {
 
 .sidebar-foot {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
 }
 
 .content {
@@ -595,6 +599,103 @@ label.checkbox input {
 
 .settings-section h3 {
   margin-top: 0;
+}
+
+/* toasts */
+.toast-stack {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 100;
+  max-width: min(380px, calc(100vw - 2rem));
+}
+
+.toast {
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  animation: toast-in 0.18s ease-out;
+  word-break: break-word;
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.toast.success {
+  background: #065f46;
+  color: #d1fae5;
+}
+
+.toast.error {
+  background: #991b1b;
+  color: #fee2e2;
+}
+
+/* sidebar status */
+.sidebar-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+
+.sidebar-status a {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0.3rem;
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.78rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar-status a:hover {
+  background: rgba(127, 127, 127, 0.1);
+}
+
+.sidebar-status .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.ok {
+  background: #16a34a;
+}
+
+.status-dot.warn {
+  background: #f59e0b;
+}
+
+.status-dot.error {
+  background: #dc2626;
+}
+
+.status-dot.neutral {
+  background: #9aa1ab;
 }
 
 .danger-zone {

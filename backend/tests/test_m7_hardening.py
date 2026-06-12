@@ -66,3 +66,14 @@ def test_log_snippet_truncation():
     assert truncate_snippet("x" * 1000) == "x" * MAX_SNIPPET_LOG_CHARS
     assert MAX_SNIPPET_LOG_CHARS == 200  # spec §6.6
     assert truncate_snippet(None) is None
+
+
+def test_telegram_status_derived_from_settings(auth_client):
+    assert auth_client.get("/api/v1/status").json()["telegram"]["status"] \
+        == "unconfigured"
+    auth_client.put("/api/v1/settings", json={
+        "telegram_bot_token": "123:abc", "telegram_default_chat_id": "55"})
+    # Configured in DB -> no longer "unconfigured", even with no send yet
+    # (and survives restarts, unlike the in-memory app_state).
+    assert auth_client.get("/api/v1/status").json()["telegram"]["status"] \
+        == "configured"

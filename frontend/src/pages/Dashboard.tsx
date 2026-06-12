@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Stats, get, post } from "../api";
 import { AsyncButton, Badge, fmtDate } from "../components";
 import { useApp } from "../App";
+import { useToast } from "../toast";
 
 export default function Dashboard() {
   const { status, refresh } = useApp();
+  const toast = useToast();
   const [stats, setStats] = useState<Stats | null>(null);
-  const [note, setNote] = useState<string | null>(null);
 
   const load = () => get<Stats>("/stats").then(setStats);
   useEffect(() => {
@@ -22,12 +23,11 @@ export default function Dashboard() {
         <div className="head-actions">
           <AsyncButton
             onClick={async () => {
-              setNote(null);
               try {
                 const r = await post<{ new_emails: number }>("/poller/run-now");
-                setNote(`Poll done: ${r.new_emails} new email(s)`);
+                toast.success(`Poll done: ${r.new_emails} new email(s)`);
               } catch (e) {
-                setNote(`Poll failed: ${e instanceof Error ? e.message : e}`);
+                toast.error(`Poll failed: ${e instanceof Error ? e.message : e}`);
               }
               await Promise.all([refresh(), load()]);
             }}
@@ -36,14 +36,13 @@ export default function Dashboard() {
           </AsyncButton>
           <AsyncButton
             onClick={async () => {
-              setNote(null);
               try {
                 const r = await post<{ classified: number; actioned: number }>(
                   "/classify/run-now",
                 );
-                setNote(`Classified ${r.classified}, actioned ${r.actioned}`);
+                toast.success(`Classified ${r.classified}, actioned ${r.actioned}`);
               } catch (e) {
-                setNote(`Classify failed: ${e instanceof Error ? e.message : e}`);
+                toast.error(`Classify failed: ${e instanceof Error ? e.message : e}`);
               }
               await Promise.all([refresh(), load()]);
             }}
@@ -52,7 +51,6 @@ export default function Dashboard() {
           </AsyncButton>
         </div>
       </header>
-      {note && <p className="note">{note}</p>}
       {status?.dry_run && (
         <p className="dry-run-banner">
           Dry-run is <b>ON</b> — the pipeline runs fully, but no Gmail changes are

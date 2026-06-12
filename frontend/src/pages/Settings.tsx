@@ -1,24 +1,24 @@
 import { useEffect, useState } from "react";
 import { Settings, del, get, post, put } from "../api";
-import { AsyncButton, Badge, ConfirmDialog, ErrorNote } from "../components";
+import { AsyncButton, Badge, ConfirmDialog } from "../components";
+import { useToast } from "../toast";
 import { useApp } from "../App";
 
 export function GmailConnect({ onChange }: { onChange?: () => void }) {
   const { status, refresh } = useApp();
+  const toast = useToast();
   const [credsJson, setCredsJson] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   const connected = status?.gmail.connected;
 
   const start = async () => {
-    setError(null);
     try {
       const r = await post<{ auth_url: string }>("/gmail/oauth/start", {
         client_secret_json: credsJson || null,
       });
       window.location.href = r.auth_url;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -71,7 +71,6 @@ export function GmailConnect({ onChange }: { onChange?: () => void }) {
             value={credsJson}
             onChange={(e) => setCredsJson(e.target.value)}
           />
-          <ErrorNote error={error} />
           <button className="primary" onClick={start}>
             Connect Gmail
           </button>
@@ -83,11 +82,10 @@ export function GmailConnect({ onChange }: { onChange?: () => void }) {
 
 export default function SettingsPage() {
   const { refresh } = useApp();
+  const toast = useToast();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [telegramToken, setTelegramToken] = useState("");
-  const [note, setNote] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [confirmingPurge, setConfirmingPurge] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
 
@@ -102,15 +100,13 @@ export default function SettingsPage() {
     draft[key] !== undefined ? draft[key] : String(settings[key] ?? "");
 
   const saveValues = async (values: Record<string, unknown>) => {
-    setError(null);
-    setNote(null);
     try {
       setSettings(await put<Settings>("/settings", values));
       setDraft({});
-      setNote("Saved.");
+      toast.success("Settings saved");
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -129,9 +125,6 @@ export default function SettingsPage() {
       <header className="page-head">
         <h2>Settings</h2>
       </header>
-      {note && <p className="note">{note}</p>}
-      <ErrorNote error={error} />
-
       <GmailConnect onChange={load} />
 
       <div className="settings-section">
@@ -224,11 +217,8 @@ export default function SettingsPage() {
               const r = await post<{ ok: boolean; error?: string; models?: string[] }>(
                 "/llm/test",
               );
-              setNote(
-                r.ok
-                  ? `LLM OK — models: ${r.models?.join(", ")}`
-                  : `LLM unreachable: ${r.error}`,
-              );
+              if (r.ok) toast.success(`LLM OK — models: ${r.models?.join(", ")}`);
+              else toast.error(`LLM unreachable: ${r.error}`);
             }}
           >
             Test LLM connection
@@ -280,10 +270,12 @@ export default function SettingsPage() {
             onClick={async () => {
               try {
                 const r = await post<{ ok: boolean; error?: string }>("/telegram/test");
-                setNote(r.ok ? "Telegram test message sent ✓" : `Telegram failed: ${r.error}`);
+                if (r.ok) toast.success("Telegram test message sent");
+                else toast.error(`Telegram failed: ${r.error}`);
               } catch (e) {
-                setNote(`Telegram failed: ${e instanceof Error ? e.message : e}`);
+                toast.error(`Telegram failed: ${e instanceof Error ? e.message : e}`);
               }
+              await refresh();
             }}
           >
             Send test message
@@ -331,10 +323,10 @@ export default function SettingsPage() {
                     "/settings/import",
                     parsed,
                   );
-                  setNote(`Imported: ${r.imported.join(", ")}`);
+                  toast.success(`Imported: ${r.imported.join(", ")}`);
                   load();
                 } catch (err) {
-                  setError(err instanceof Error ? err.message : String(err));
+                  toast.error(err instanceof Error ? err.message : String(err));
                 }
                 e.target.value = "";
               }}
@@ -383,19 +375,18 @@ export default function SettingsPage() {
           }
           onConfirm={async () => {
             setConfirmingPurge(false);
-            setError(null);
             try {
               const r = await post<{ deleted: Record<string, number> }>(
                 "/admin/purge-data",
               );
-              setNote(
+              toast.success(
                 `Purged: ${Object.entries(r.deleted)
                   .map(([table, n]) => `${table} ${n}`)
                   .join(", ")}`,
               );
               await refresh();
             } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
+              toast.error(e instanceof Error ? e.message : String(e));
             }
           }}
           onCancel={() => setConfirmingPurge(false)}
@@ -416,12 +407,12 @@ export default function SettingsPage() {
           }
           onConfirm={async () => {
             setConfirmingReset(false);
-            setError(null);
             try {
               await post("/admin/factory-reset");
+              toast.success("Factory reset complete");
               await refresh();
             } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
+              toast.error(e instanceof Error ? e.message : String(e));
             }
           }}
           onCancel={() => setConfirmingReset(false)}

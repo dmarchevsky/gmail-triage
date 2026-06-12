@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Category, CriteriaVersion, del, get, post, put } from "../api";
-import { Badge, ConfirmDialog, DiffView, ErrorNote, Modal, fmtDate } from "../components";
+import { Badge, ConfirmDialog, DiffView, Modal, fmtDate } from "../components";
+import { useToast } from "../toast";
 
 function CategoryEditor({
   category,
@@ -11,6 +12,7 @@ function CategoryEditor({
   onSaved: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
   const [form, setForm] = useState({
     name: category?.name ?? "",
     description: category?.description ?? "",
@@ -18,17 +20,15 @@ function CategoryEditor({
     criteria_md: category?.criteria_md ?? "",
     enabled: category?.enabled ?? true,
   });
-  const [error, setError] = useState<string | null>(null);
-
   const save = async () => {
-    setError(null);
     try {
       if (category) await put(`/categories/${category.id}`, form);
       else await post("/categories", form);
+      toast.success(category ? "Category updated" : "Category created");
       onSaved();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -79,7 +79,6 @@ function CategoryEditor({
           Enabled (included in classification prompt)
         </label>
       </div>
-      <ErrorNote error={error} />
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
         <button className="primary" onClick={save}>
@@ -99,9 +98,9 @@ function HistoryViewer({
   onRestored: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
   const [history, setHistory] = useState<CriteriaVersion[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     get<CriteriaVersion[]>(`/categories/${category.id}/criteria-history`).then(setHistory);
@@ -139,11 +138,9 @@ function HistoryViewer({
                   oldText={selectedVersion.criteria_md}
                   newText={current?.criteria_md ?? ""}
                 />
-                <ErrorNote error={error} />
                 <button
                   className="primary"
                   onClick={async () => {
-                    setError(null);
                     try {
                       await put(`/categories/${category.id}`, {
                         name: category.name,
@@ -152,10 +149,11 @@ function HistoryViewer({
                         criteria_md: selectedVersion.criteria_md,
                         enabled: category.enabled,
                       });
+                      toast.success(`Restored v${selectedVersion.version} as a new version`);
                       onRestored();
                       onClose();
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : String(e));
+                      toast.error(e instanceof Error ? e.message : String(e));
                     }
                   }}
                 >

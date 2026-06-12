@@ -12,6 +12,16 @@ from app.state import app_state
 router = APIRouter()
 
 
+def _telegram_status(session: Session) -> str:
+    """Derived from stored config (app_state alone resets on restart)."""
+    configured = bool(settings_service.get_setting(session, "telegram_bot_token")) \
+        and bool(settings_service.get_setting(session, "telegram_default_chat_id"))
+    if not configured:
+        return "unconfigured"
+    return app_state.telegram_status if app_state.telegram_status != "unconfigured" \
+        else "configured"
+
+
 @router.get("/status")
 def get_status(session: Session = Depends(get_session)) -> dict:
     gmail_connected = session.scalar(select(GmailAuth).limit(1)) is not None
@@ -24,7 +34,7 @@ def get_status(session: Session = Depends(get_session)) -> dict:
             "status": app_state.gmail_status,
         },
         "llm": {"status": app_state.llm_status},
-        "telegram": {"status": app_state.telegram_status},
+        "telegram": {"status": _telegram_status(session)},
         "poller": {
             "status": app_state.poller_status,
             "last_run_at": app_state.poller_last_run_at,

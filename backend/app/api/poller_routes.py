@@ -18,6 +18,7 @@ async def run_now(session: Session = Depends(get_session)) -> dict:
     except GmailAuthError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     audit(session, "user", "poll_run_now", result)
+    session.commit()
     return result
 
 
@@ -28,6 +29,7 @@ def pause(body: dict, session: Session = Depends(get_session)) -> dict:
         raise HTTPException(status_code=400, detail="body must be {paused: bool}")
     settings_service.set_setting(session, "poller_paused", paused)
     audit(session, "user", "poller_paused" if paused else "poller_resumed", {})
+    session.commit()
     if not paused:
         poller.wake()
     return {"paused": paused}

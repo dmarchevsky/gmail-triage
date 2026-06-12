@@ -7,7 +7,8 @@ import {
   Routes,
 } from "react-router-dom";
 import { ApiError, Settings, StatusResponse, get, post, put } from "./api";
-import { Badge, ConfirmDialog } from "./components";
+import { ConfirmDialog } from "./components";
+import { ToastProvider } from "./toast";
 import Dashboard from "./pages/Dashboard";
 import Emails from "./pages/Emails";
 import Categories from "./pages/Categories";
@@ -110,23 +111,59 @@ function DryRunToggle() {
   );
 }
 
-function StatusStrip() {
+function SidebarStatus() {
   const { status } = useApp();
   if (!status) return null;
-  const tone = (ok: boolean) => (ok ? "ok" : "warn");
+  const items: { dot: string; text: string; title: string }[] = [
+    {
+      dot: !status.gmail.connected
+        ? "warn"
+        : status.gmail.status === "auth_error"
+          ? "error"
+          : "ok",
+      text: status.gmail.connected
+        ? `Gmail: ${status.gmail.email ?? "connected"}`
+        : "Gmail: not connected",
+      title: status.gmail.status === "auth_error" ? "Gmail auth error" : "Gmail",
+    },
+    {
+      dot: status.llm.status === "ok"
+        ? "ok"
+        : status.llm.status === "unreachable"
+          ? "error"
+          : "neutral",
+      text: `LLM: ${status.llm.status}`,
+      title: "LLM endpoint",
+    },
+    {
+      dot: status.telegram.status === "ok" || status.telegram.status === "configured"
+        ? "ok"
+        : status.telegram.status === "error"
+          ? "error"
+          : "neutral",
+      text: `Telegram: ${status.telegram.status}`,
+      title: "Telegram bot",
+    },
+    {
+      dot: status.poller.paused
+        ? "warn"
+        : status.poller.status === "running"
+          ? "ok"
+          : "warn",
+      text: `Poller: ${status.poller.paused ? "paused" : status.poller.status}`,
+      title: status.poller.last_error
+        ? `Last error: ${status.poller.last_error}`
+        : "Poller",
+    },
+  ];
   return (
-    <div className="status-strip">
-      <Badge tone={tone(status.gmail.connected && status.gmail.status !== "auth_error")}>
-        Gmail{status.gmail.email ? `: ${status.gmail.email}` : ""}
-        {status.gmail.status === "auth_error" ? " (auth error)" : ""}
-      </Badge>
-      <Badge tone={tone(status.llm.status === "ok")}>LLM: {status.llm.status}</Badge>
-      <Badge tone={status.telegram.status === "ok" ? "ok" : "neutral"}>
-        Telegram: {status.telegram.status}
-      </Badge>
-      <Badge tone={status.poller.paused ? "warn" : tone(status.poller.status === "running")}>
-        Poller: {status.poller.paused ? "paused" : status.poller.status}
-      </Badge>
+    <div className="sidebar-status">
+      {items.map((item) => (
+        <NavLink to="/settings" key={item.text} title={item.title}>
+          <span className={`status-dot ${item.dot}`} />
+          <span className="label">{item.text}</span>
+        </NavLink>
+      ))}
     </div>
   );
 }
@@ -155,11 +192,11 @@ function Shell() {
           <NavLink to="/settings">Settings</NavLink>
         </nav>
         <div className="sidebar-foot">
+          <SidebarStatus />
           <DryRunToggle />
         </div>
       </aside>
       <main className="content">
-        <StatusStrip />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/emails" element={<Emails />} />
@@ -209,9 +246,11 @@ export default function App() {
 
   return (
     <AppContext.Provider value={{ status, settings, refresh }}>
-      <HashRouter>
-        <Shell />
-      </HashRouter>
+      <ToastProvider>
+        <HashRouter>
+          <Shell />
+        </HashRouter>
+      </ToastProvider>
     </AppContext.Provider>
   );
 }
