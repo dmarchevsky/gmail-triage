@@ -597,6 +597,14 @@ label.checkbox input {
   margin-top: 0;
 }
 
+.danger-zone {
+  border-color: var(--danger);
+}
+
+.danger-zone h3 {
+  color: var(--danger);
+}
+
 /* wizard */
 .wizard {
   display: flex;

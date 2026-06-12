@@ -88,6 +88,8 @@ export default function SettingsPage() {
   const [telegramToken, setTelegramToken] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingPurge, setConfirmingPurge] = useState(false);
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   const load = () => get<Settings>("/settings").then(setSettings);
   useEffect(() => {
@@ -340,6 +342,91 @@ export default function SettingsPage() {
           </label>
         </div>
       </div>
+
+      <div className="settings-section danger-zone">
+        <h3>Danger zone</h3>
+        <p className="sub">
+          Both operations only touch MailTriage's local database — nothing in your
+          Gmail changes (labels already applied stay).
+        </p>
+        <div className="head-actions">
+          <button className="danger" onClick={() => setConfirmingPurge(true)}>
+            Purge processing data
+          </button>
+          <button className="danger" onClick={() => setConfirmingReset(true)}>
+            Factory reset
+          </button>
+        </div>
+      </div>
+
+      {confirmingPurge && (
+        <ConfirmDialog
+          title="Purge processing data?"
+          danger
+          confirmLabel="Purge data"
+          message={
+            <>
+              <p>
+                <b>Deletes:</b> all ingested emails and their classifications,
+                planned/executed action records, digest run history, feedback, and
+                the audit log.
+              </p>
+              <p>
+                <b>Keeps:</b> Gmail connection, categories, rules, digests, and
+                settings.
+              </p>
+              <p>
+                The sync watermark is reset, so the next poll re-ingests and
+                re-classifies the initial-lookback window like a first run.
+              </p>
+            </>
+          }
+          onConfirm={async () => {
+            setConfirmingPurge(false);
+            setError(null);
+            try {
+              const r = await post<{ deleted: Record<string, number> }>(
+                "/admin/purge-data",
+              );
+              setNote(
+                `Purged: ${Object.entries(r.deleted)
+                  .map(([table, n]) => `${table} ${n}`)
+                  .join(", ")}`,
+              );
+              await refresh();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            }
+          }}
+          onCancel={() => setConfirmingPurge(false)}
+        />
+      )}
+      {confirmingReset && (
+        <ConfirmDialog
+          title="Factory reset?"
+          danger
+          confirmLabel="Reset everything"
+          message={
+            <p>
+              <b>Everything</b> is deleted: the Gmail connection is revoked and
+              removed, and all emails, categories (with criteria history), rules,
+              digests, feedback and settings are wiped. You'll be taken back to the
+              first-run wizard. This cannot be undone.
+            </p>
+          }
+          onConfirm={async () => {
+            setConfirmingReset(false);
+            setError(null);
+            try {
+              await post("/admin/factory-reset");
+              await refresh();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            }
+          }}
+          onCancel={() => setConfirmingReset(false)}
+        />
+      )}
     </div>
   );
 }

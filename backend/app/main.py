@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from app.api import (
+    admin_routes,
     auth_routes,
     category_routes,
     digest_routes,
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(email_routes.router, prefix=api_prefix)
     app.include_router(feedback_routes.router, prefix=api_prefix)
     app.include_router(digest_routes.router, prefix=api_prefix)
+    app.include_router(admin_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
     if static_dir.is_dir():
