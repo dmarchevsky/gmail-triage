@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -19,6 +20,28 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class UTCDateTime(TypeDecorator):
+    """UTC-normalized datetime column.
+
+    SQLite has no tz-aware storage: values written aware are normalized to
+    UTC, and values read back (naive) are tagged as UTC so `.isoformat()`
+    carries the +00:00 offset and Python arithmetic is tz-correct.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(UTC)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is not None and value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value
 
 
 class Base(DeclarativeBase):
@@ -40,7 +63,7 @@ class GmailAuth(Base):
     email_address: Mapped[str | None] = mapped_column(String(320))
     granted_scopes: Mapped[list | None] = mapped_column(JSON)
     history_id: Mapped[str | None] = mapped_column(String(64))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
 
 
@@ -54,8 +77,8 @@ class Category(Base):
     criteria_md: Mapped[str] = mapped_column(Text, default="")
     criteria_version: Mapped[int] = mapped_column(Integer, default=1)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
 
     criteria_history: Mapped[list["CategoryCriteriaHistory"]] = relationship(
@@ -78,7 +101,7 @@ class CategoryCriteriaHistory(Base):
     criteria_md: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(16), default=CriteriaSource.user.value)
     feedback_ids: Mapped[list | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     category: Mapped[Category] = relationship(back_populates="criteria_history")
 
@@ -97,8 +120,8 @@ class Rule(Base):
     match_sender_pattern: Mapped[str | None] = mapped_column(Text)
     actions: Mapped[list] = mapped_column(JSON, default=list)  # see §4.3
     stop_processing: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
 
 
@@ -117,7 +140,7 @@ class Email(Base):
     gmail_message_id: Mapped[str] = mapped_column(String(32), unique=True)
     gmail_thread_id: Mapped[str | None] = mapped_column(String(32))
     history_id: Mapped[str | None] = mapped_column(String(64))
-    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
     sender: Mapped[str | None] = mapped_column(String(512))
     sender_domain: Mapped[str | None] = mapped_column(String(255), index=True)
     subject: Mapped[str | None] = mapped_column(Text)
@@ -131,11 +154,11 @@ class Email(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     rationale: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(String(128))
-    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     status: Mapped[str] = mapped_column(String(16), default=EmailStatus.pending.value, index=True)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
     error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     classification: Mapped[Category | None] = relationship()
     actions: Mapped[list["EmailAction"]] = relationship(
@@ -153,7 +176,7 @@ class EmailAction(Base):
     action_params: Mapped[dict | None] = mapped_column(JSON)
     executed: Mapped[bool] = mapped_column(Boolean, default=False)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
-    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    executed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     error: Mapped[str | None] = mapped_column(Text)
 
     email: Mapped[Email] = relationship(back_populates="actions")
@@ -185,8 +208,8 @@ class Feedback(Base):
     proposed_criteria_md: Mapped[str | None] = mapped_column(Text)
     proposal_explanation: Mapped[str | None] = mapped_column(Text)
     proposal_status: Mapped[str] = mapped_column(String(16), default=ProposalStatus.none.value)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
     email: Mapped[Email] = relationship()
 
@@ -207,8 +230,8 @@ class Digest(Base):
     include_metadata: Mapped[bool] = mapped_column(Boolean, default=True)
     max_emails: Mapped[int] = mapped_column(Integer, default=50)
     send_no_news: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
 
 
@@ -225,8 +248,8 @@ class DigestRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     digest_id: Mapped[int] = mapped_column(ForeignKey("digests.id", ondelete="CASCADE"))
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     status: Mapped[str] = mapped_column(String(16), default=DigestRunStatus.running.value)
     email_ids: Mapped[list] = mapped_column(JSON, default=list)
     summary_text: Mapped[str | None] = mapped_column(Text)
@@ -238,7 +261,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     actor: Mapped[str] = mapped_column(String(16))  # system|user|scheduler
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     payload: Mapped[dict | None] = mapped_column(JSON)

@@ -223,3 +223,18 @@ def test_max_emails_cap_newest_first(auth_client, db_session, digest_setup):
     mock_llm_text()
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
     assert run["email_ids"] == [digest_setup["e2"]]  # newest of the two
+
+
+def test_render_message_uses_digest_timezone():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="d", timezone="America/Los_Angeles",
+                    include_metadata=True, include_links=False)
+    email = Email(gmail_message_id="z1", sender="a@x.com", subject="s",
+                  received_at=datetime(2026, 6, 12, 18, 30, tzinfo=UTC))
+    msg = _render_message(digest, [email], "summary", dry_run_prefix=False)
+    assert "• 11:30 " in msg          # 18:30 UTC == 11:30 PDT
+
+    digest.timezone = "Not/AZone"
+    msg = _render_message(digest, [email], "summary", dry_run_prefix=False)
+    assert "• 18:30 " in msg          # invalid tz falls back to UTC

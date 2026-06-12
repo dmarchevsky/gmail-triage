@@ -8,6 +8,7 @@ keep emails eligible.
 """
 
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -112,6 +113,10 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
 def _render_message(digest: Digest, emails: list[Email], summary: str,
                     dry_run_prefix: bool) -> str:
     esc = telegram.escape_html
+    try:
+        tz = ZoneInfo(digest.timezone or "UTC")
+    except (KeyError, ZoneInfoNotFoundError):
+        tz = UTC
     parts = []
     if dry_run_prefix:
         parts.append("[DRY RUN]")
@@ -120,7 +125,8 @@ def _render_message(digest: Digest, emails: list[Email], summary: str,
     if digest.include_metadata:
         lines = []
         for e in emails:
-            when = e.received_at.strftime("%H:%M") if e.received_at else "?"
+            when = e.received_at.astimezone(tz).strftime("%H:%M") \
+                if e.received_at else "?"
             line = f"• {when} {esc(e.sender or '?')} — {esc(e.subject or '(no subject)')}"
             if digest.include_links:
                 line += (f' <a href="{GMAIL_DEEP_LINK.format(msg_id=e.gmail_message_id)}"'

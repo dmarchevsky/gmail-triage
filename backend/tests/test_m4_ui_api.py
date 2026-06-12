@@ -74,3 +74,29 @@ def test_audit_log_endpoint(auth_client, dataset):
     log = auth_client.get("/api/v1/audit-log?event_type=poll_completed").json()
     assert log["total"] == 1
     assert log["items"][0]["actor"] == "system"
+
+
+def test_timestamps_serialized_with_utc_offset(auth_client, db_session, dataset):
+    """Naive-SQLite datetimes must come out tz-tagged so the browser parses
+    them as UTC, not local (the 7-hours-ahead bug)."""
+    e2 = db_session.query(Email).filter_by(gmail_message_id="e2").one()
+    detail = auth_client.get(f"/api/v1/emails/{e2.id}").json()
+    assert detail["received_at"].endswith("+00:00")
+    listed = auth_client.get("/api/v1/emails").json()["items"]
+    assert all(i["received_at"].endswith("+00:00") for i in listed if i["received_at"])
+    log = auth_client.get("/api/v1/audit-log").json()["items"]
+    assert all(r["ts"].endswith("+00:00") for r in log if r["ts"])
+
+
+def test_utc_datetime_roundtrip_normalizes_aware_writes(db_session):
+    from datetime import UTC, datetime, timedelta, timezone
+
+    pdt = timezone(timedelta(hours=-7))
+    written = datetime(2026, 6, 12, 11, 30, tzinfo=pdt)  # 18:30 UTC
+    db_session.add(Email(gmail_message_id="tz1", received_at=written))
+    db_session.commit()
+    db_session.expire_all()
+    read = db_session.query(Email).filter_by(gmail_message_id="tz1").one().received_at
+    assert read.tzinfo is not None
+    assert read == written                       # same instant
+    assert read.astimezone(UTC).hour == 18       # stored/read as UTC
