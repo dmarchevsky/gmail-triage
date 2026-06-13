@@ -73,3 +73,14 @@ def test_refuses_default_secrets(monkeypatch):
     with pytest.raises(RuntimeError, match="UI_PASSWORD"):
         cfg.validate_secrets()
 
+
+
+def test_status_exposes_classifier_state(client, db_session):
+    from app.models import Email
+
+    body = client.get("/api/v1/status").json()
+    assert body["classifier"] == {"running": False, "done": 0, "total": 0,
+                                  "pending_emails": 0}
+    db_session.add(Email(gmail_message_id="cp1", status="pending"))
+    db_session.commit()
+    assert client.get("/api/v1/status").json()["classifier"]["pending_emails"] == 1

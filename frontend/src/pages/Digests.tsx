@@ -95,13 +95,6 @@ function DigestEditor({
           />
         </label>
         <label>
-          Timezone
-          <input
-            value={form.timezone}
-            onChange={(e) => setForm({ ...form, timezone: e.target.value })}
-          />
-        </label>
-        <label>
           Min confidence ({pct(form.min_confidence)})
           <input
             type="range"

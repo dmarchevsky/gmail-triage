@@ -63,11 +63,7 @@ function CategoryEditor({
             rows={10}
             value={form.criteria_md}
             onChange={(e) => setForm({ ...form, criteria_md: e.target.value })}
-            placeholder={
-              "Describe in plain language what belongs in this category.\n" +
-              "E.g.: Daily/weekly market commentary newsletters; stock, bond,\n" +
-              "macro analysis; NOT individual trade confirmations."
-            }
+            placeholder="Describe in plain language what belongs in this category, e.g.: daily/weekly market commentary newsletters; stock, bond, macro analysis; NOT individual trade confirmations."
           />
         </label>
         <label className="checkbox span2">

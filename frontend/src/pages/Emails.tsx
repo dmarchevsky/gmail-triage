@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, EmailList, EmailRow, get, post } from "../api";
+import { Category, EmailList, EmailRow, StatusResponse, get, post } from "../api";
 import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, fmtDate, pct } from "../components";
 import { useToast } from "../toast";
 
@@ -193,6 +193,26 @@ export default function Emails() {
     get<Category[]>("/categories").then(setCategories);
   }, []);
 
+  // Live refresh while classification runs: poll /status cheaply; reload the
+  // list on every tick while running, plus once more when it finishes.
+  const [classifying, setClassifying] = useState(false);
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const tick = async () => {
+      try {
+        const st = await get<StatusResponse>("/status");
+        const running = st.classifier.running;
+        setClassifying(running);
+        if (running || wasRunning.current) await load();
+        wasRunning.current = running;
+      } catch {
+        /* transient */
+      }
+    };
+    const id = setInterval(tick, 4000);
+    return () => clearInterval(id);
+  }, [load]);
+
   const totalPages = list ? Math.max(1, Math.ceil(list.total / list.page_size)) : 1;
   const pageIds = list?.items.map((e) => e.id) ?? [];
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
@@ -251,6 +271,7 @@ export default function Emails() {
     <div>
       <header className="page-head">
         <h2>Emails</h2>
+        {classifying && <Badge tone="warn">classifying — list updates live</Badge>}
       </header>
 
       <div className="filters">
@@ -335,7 +356,7 @@ export default function Emails() {
       <table className="table emails-table">
         <thead>
           <tr>
-            <th>
+            <th className="col-check">
               <input
                 type="checkbox"
                 ref={selectAllRef}
@@ -343,14 +364,14 @@ export default function Emails() {
                 onChange={() => (allChecked ? clearSelection() : selectAll())}
               />
             </th>
-            <th>Date</th>
-            <th>Sender</th>
+            <th className="col-date">Date</th>
+            <th className="col-sender">Sender</th>
             <th>Subject</th>
-            <th>Category</th>
-            <th>Conf.</th>
-            <th>Status</th>
-            <th>Actions</th>
-            <th></th>
+            <th className="col-cat">Category</th>
+            <th className="col-conf">Conf.</th>
+            <th className="col-status">Status</th>
+            <th className="col-acts">Actions</th>
+            <th className="col-rerun"></th>
           </tr>
         </thead>
         <tbody>

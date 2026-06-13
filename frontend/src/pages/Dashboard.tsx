@@ -102,6 +102,27 @@ export default function Dashboard() {
                 </Badge>
               </div>
             </div>
+            <div className="card">
+              <h4>Classifier</h4>
+              {status?.classifier.running ? (
+                <>
+                  <div className="big pulse">
+                    {status.classifier.done}/{status.classifier.total}
+                  </div>
+                  <div className="sub">
+                    <Badge tone="warn">classifying…</Badge>{" "}
+                    {status.classifier.pending_emails} email(s) pending
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="big">{status?.classifier.pending_emails ?? 0}</div>
+                  <div className="sub">
+                    pending · <Badge tone="ok">idle</Badge>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {stats.category_precision.some((p) => p.flagged_wrong > 0) && (

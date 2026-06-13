@@ -12,6 +12,9 @@ class AppState:
     poller_status: str = "stopped"       # stopped|running|paused|error
     poller_last_run_at: str | None = None
     poller_last_error: str | None = None
+    classifier_running: bool = False
+    classifier_done: int = 0
+    classifier_total: int = 0
 
 
 app_state = AppState()

@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import GmailAuth, Rule
+from app.models import Email, EmailStatus, GmailAuth, Rule
 from app.services import settings_service
 from app.state import app_state
 
@@ -46,5 +46,12 @@ def get_status(session: Session = Depends(get_session)) -> dict:
                 Rule.enabled.is_(True), Rule.dry_run.is_(False))) or 0,
             "dry": session.scalar(select(func.count(Rule.id)).where(
                 Rule.enabled.is_(True), Rule.dry_run.is_(True))) or 0,
+        },
+        "classifier": {
+            "running": app_state.classifier_running,
+            "done": app_state.classifier_done,
+            "total": app_state.classifier_total,
+            "pending_emails": session.scalar(select(func.count(Email.id)).where(
+                Email.status == EmailStatus.pending.value)) or 0,
         },
     }

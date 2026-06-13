@@ -17,6 +17,7 @@ from app.models import Category, Email, EmailStatus
 from app.services import gmail, llm, settings_service
 from app.services.gmail import GmailAuthError, GmailClient
 from app.services.matchers import sender_matches
+from app.state import app_state
 
 log = get_logger(__name__)
 
@@ -154,6 +155,9 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
     if not client_secret:
         raise GmailAuthError("Gmail is not connected")
     client = GmailClient(session, client_secret)
+    app_state.classifier_running = True
+    app_state.classifier_done = 0
+    app_state.classifier_total = len(pending)
     try:
         for email in pending:
             try:
@@ -162,6 +166,7 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
             except llm.LLMUnavailable as e:
                 log.warning("llm_unreachable_batch_stopped", error=str(e))
                 break
+            app_state.classifier_done += 1
             if email.status == EmailStatus.pending.value:
                 break  # no categories to classify against; leave the rest
             if email.status == EmailStatus.skipped.value:
@@ -173,6 +178,7 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
                 if email.status == EmailStatus.actioned.value:
                     counts["actioned"] += 1
     finally:
+        app_state.classifier_running = False
         await client.aclose()
 
     remaining = session.scalar(

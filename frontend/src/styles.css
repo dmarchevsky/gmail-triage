@@ -338,6 +338,64 @@ tr.clickable:hover td {
   white-space: nowrap;
 }
 
+/* emails table: fixed layout, one line per row */
+.emails-table {
+  table-layout: fixed;
+}
+
+.emails-table th,
+.emails-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.emails-table .col-check {
+  width: 34px;
+}
+
+.emails-table .col-date {
+  width: 96px;
+}
+
+.emails-table .col-sender {
+  width: 17%;
+}
+
+.emails-table .col-cat {
+  width: 110px;
+}
+
+.emails-table .col-conf {
+  width: 56px;
+}
+
+.emails-table .col-status {
+  width: 140px;
+}
+
+.emails-table .col-acts {
+  width: 150px;
+}
+
+.emails-table .col-rerun {
+  width: 48px;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.pulse {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
 .payload {
   font-family: monospace;
   font-size: 0.75rem;

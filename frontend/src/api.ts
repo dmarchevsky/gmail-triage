@@ -53,6 +53,7 @@ export interface StatusResponse {
     paused: boolean;
   };
   rules_mode: { live: number; dry: number };
+  classifier: { running: boolean; done: number; total: number; pending_emails: number };
 }
 
 export interface Category {
