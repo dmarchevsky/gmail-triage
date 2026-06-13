@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { Category, Rule, RuleAction, del, get, post, put } from "../api";
-import { Badge, ConfirmDialog, Modal, actionLabel, pct } from "../components";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Category, Rule, RuleAction, del, delWithBody, get, post, put } from "../api";
+import { Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, pct } from "../components";
 import { useToast } from "../toast";
 
 const ACTION_TYPES: RuleAction["type"][] = [
@@ -304,6 +304,46 @@ function TestResults({ rule, onClose }: { rule: Rule; onClose: () => void }) {
   );
 }
 
+interface BulkTestResult {
+  rule_id: number;
+  rule_name: string;
+  tested: number;
+  match_count: number;
+  matches: { email_id: number; subject: string; sender: string; confidence: number }[];
+}
+
+function BulkTestResultsModal({
+  results,
+  onClose,
+}: {
+  results: BulkTestResult[];
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Bulk test results" onClose={onClose} wide>
+      {results.map((r) => (
+        <div key={r.rule_id} className="settings-section">
+          <p>
+            <b>{r.rule_name}</b>: matched <b>{r.match_count}</b> of {r.tested} recent emails
+          </p>
+          {r.matches.length > 0 && (
+            <ul>
+              {r.matches.map((m) => (
+                <li key={m.email_id}>
+                  {m.subject}{" "}
+                  <span className="sub">
+                    ({m.sender}, {pct(m.confidence)})
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </Modal>
+  );
+}
+
 function ruleBody(rule: Rule, overrides: Partial<Rule>) {
   return {
     name: rule.name,
@@ -328,6 +368,9 @@ export default function Rules() {
   const [deleting, setDeleting] = useState<Rule | null>(null);
   const [goingLive, setGoingLive] = useState<Rule | null>(null);
   const [offerApply, setOfferApply] = useState<Rule | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState<"delete" | "go-live" | null>(null);
+  const [bulkTestResults, setBulkTestResults] = useState<BulkTestResult[] | null>(null);
 
   const applyPlanned = async (rule: Rule) => {
     try {
@@ -348,7 +391,7 @@ export default function Rules() {
   const setMode = async (rule: Rule, dryRun: boolean) => {
     try {
       const updated = await put<Rule>(`/rules/${rule.id}`, ruleBody(rule, { dry_run: dryRun }));
-      toast.success(dryRun ? `“${rule.name}” back to dry-run` : `“${rule.name}” is LIVE`);
+      toast.success(dryRun ? `"${rule.name}" back to dry-run` : `"${rule.name}" is LIVE`);
       if (!dryRun && updated.pending_planned > 0) setOfferApply(updated);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -376,6 +419,62 @@ export default function Rules() {
   const catName = (id: number | null) =>
     id == null ? "any" : (categories.find((c) => c.id === id)?.name ?? `#${id}`);
 
+  const allChecked = rules.length > 0 && rules.every((r) => selectedIds.has(r.id));
+  const someChecked = rules.some((r) => selectedIds.has(r.id));
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current)
+      selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleSelect = (id: number) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selectAll = () => setSelectedIds(new Set(rules.map((r) => r.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const doBulkUpdate = async (patch: { enabled?: boolean; dry_run?: boolean }) => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await put<{ updated: number }>("/rules/bulk", { rule_ids: ids, ...patch });
+      toast.success(`${r.updated} rule${r.updated === 1 ? "" : "s"} updated`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await delWithBody<{ deleted: number }>("/rules/bulk", { rule_ids: ids });
+      toast.success(`${r.deleted} rule${r.deleted === 1 ? "" : "s"} deleted`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doBulkTest = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await post<{ results: BulkTestResult[] }>("/rules/bulk-test", {
+        rule_ids: ids,
+        limit: 20,
+      });
+      setBulkTestResults(r.results);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div>
       <header className="page-head">
@@ -390,9 +489,37 @@ export default function Rules() {
         untouched.
       </p>
 
+      <BulkActionBar
+        count={selectedIds.size}
+        onClear={clearSelection}
+        actions={[
+          { label: "Enable", onClick: async () => doBulkUpdate({ enabled: true }) },
+          { label: "Disable", onClick: async () => doBulkUpdate({ enabled: false }) },
+          {
+            label: "Go live",
+            onClick: async () => setBulkConfirm("go-live"),
+          },
+          { label: "Go dry-run", onClick: async () => doBulkUpdate({ dry_run: true }) },
+          { label: "Test", onClick: doBulkTest },
+          {
+            label: "Delete",
+            danger: true,
+            onClick: async () => setBulkConfirm("delete"),
+          },
+        ]}
+      />
+
       <table className="table">
         <thead>
           <tr>
+            <th>
+              <input
+                type="checkbox"
+                ref={selectAllRef}
+                checked={allChecked}
+                onChange={() => (allChecked ? clearSelection() : selectAll())}
+              />
+            </th>
             <th>Order</th>
             <th>Name</th>
             <th>Match</th>
@@ -406,6 +533,13 @@ export default function Rules() {
         <tbody>
           {rules.map((r, i) => (
             <tr key={r.id}>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(r.id)}
+                  onChange={() => toggleSelect(r.id)}
+                />
+              </td>
               <td className="order-cell">
                 <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)}>
                   ▲
@@ -465,7 +599,7 @@ export default function Rules() {
           ))}
           {rules.length === 0 && (
             <tr>
-              <td colSpan={8} className="sub">
+              <td colSpan={9} className="sub">
                 No rules — classified emails are recorded but nothing is changed in
                 Gmail. New rules start in dry-run.
               </td>
@@ -483,9 +617,15 @@ export default function Rules() {
         />
       )}
       {testing && <TestResults rule={testing} onClose={() => setTesting(null)} />}
+      {bulkTestResults && (
+        <BulkTestResultsModal
+          results={bulkTestResults}
+          onClose={() => setBulkTestResults(null)}
+        />
+      )}
       {goingLive && (
         <ConfirmDialog
-          title={`Switch “${goingLive.name}” to LIVE?`}
+          title={`Switch "${goingLive.name}" to LIVE?`}
           danger
           confirmLabel="Go live"
           message={
@@ -502,13 +642,31 @@ export default function Rules() {
           onCancel={() => setGoingLive(null)}
         />
       )}
+      {bulkConfirm === "go-live" && (
+        <ConfirmDialog
+          title={`Switch ${selectedIds.size} rule(s) to LIVE?`}
+          danger
+          confirmLabel="Go live"
+          message={
+            <p>
+              These rules' actions will <b>really modify your Gmail</b> from now on:
+              labels, mark-read, archive and trash will execute on matching emails.
+            </p>
+          }
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkUpdate({ dry_run: false });
+          }}
+          onCancel={() => setBulkConfirm(null)}
+        />
+      )}
       {offerApply && (
         <ConfirmDialog
           title={`Apply ${offerApply.pending_planned} planned action(s)?`}
           confirmLabel="Apply now"
           message={
             <p>
-              While “{offerApply.name}” was in dry-run it planned{" "}
+              While "{offerApply.name}" was in dry-run it planned{" "}
               <b>{offerApply.pending_planned}</b> action(s) on past emails. Apply
               them to Gmail now? (Exactly the actions shown in each email's detail
               view — nothing is re-evaluated.)
@@ -524,7 +682,7 @@ export default function Rules() {
       )}
       {deleting && (
         <ConfirmDialog
-          title={`Delete rule “${deleting.name}”?`}
+          title={`Delete rule "${deleting.name}"?`}
           danger
           confirmLabel="Delete"
           message={<p>The rule is removed; past action records are kept.</p>}
@@ -534,6 +692,19 @@ export default function Rules() {
             load();
           }}
           onCancel={() => setDeleting(null)}
+        />
+      )}
+      {bulkConfirm === "delete" && (
+        <ConfirmDialog
+          title={`Delete ${selectedIds.size} rule${selectedIds.size === 1 ? "" : "s"}?`}
+          danger
+          confirmLabel="Delete all"
+          message={<p>The rules are removed; past action records are kept.</p>}
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkDelete();
+          }}
+          onCancel={() => setBulkConfirm(null)}
         />
       )}
     </div>

@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -154,6 +155,109 @@ async def reclassify_email(email_id: int,
                             options=[joinedload(Email.classification),
                                      joinedload(Email.actions)])
     return serialize_email(refreshed, detail=True)
+
+
+class BulkEmailIds(BaseModel):
+    email_ids: list[int]
+
+
+@router.post("/emails/reclassify-bulk")
+async def reclassify_bulk(body: BulkEmailIds,
+                          session: Session = Depends(get_session)) -> dict:
+    """Reset selected emails to pending and kick off classification + rules."""
+    from sqlalchemy import delete
+
+    from app.models import EmailStatus
+    from app.services import classifier, llm, settings_service
+    from app.services.gmail import GmailAuthError
+
+    if not body.email_ids:
+        return {"queued": 0, "classified": 0, "skipped": 0, "errors": 0, "pending_left": 0}
+
+    settings = settings_service.get_all_settings(session, redact=False)
+    client_secret = settings.get("gmail_client_secret_json")
+    if not client_secret:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+
+    session.execute(delete(EmailAction).where(
+        EmailAction.email_id.in_(body.email_ids),
+        EmailAction.dry_run.is_(True),
+        EmailAction.executed.is_(False)))
+    emails = list(session.scalars(select(Email).where(Email.id.in_(body.email_ids))))
+    for email in emails:
+        email.classification_id = None
+        email.confidence = None
+        email.rationale = None
+        email.error = None
+        email.classified_at = None
+        email.status = EmailStatus.pending.value
+    session.commit()
+
+    try:
+        result = await classifier.classify_pending(session, limit=len(body.email_ids))
+    except GmailAuthError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except llm.LLMUnavailable as e:
+        raise HTTPException(status_code=503,
+                            detail=f"LLM unreachable; emails left pending: {e}") from e
+    return {"queued": len(emails), **result}
+
+
+@router.post("/emails/rerun-rules-bulk")
+async def rerun_rules_bulk(body: BulkEmailIds,
+                           session: Session = Depends(get_session)) -> dict:
+    """Re-apply current rules to selected already-classified emails (no LLM)."""
+    from sqlalchemy import delete
+
+    from app.models import EmailStatus
+    from app.services import rules as rules_engine
+    from app.services import settings_service
+    from app.services.gmail import GmailAuthError, GmailClient
+
+    if not body.email_ids:
+        return {"processed": 0, "actioned": 0, "errors": 0}
+
+    settings = settings_service.get_all_settings(session, redact=False)
+    client_secret = settings.get("gmail_client_secret_json")
+    if not client_secret:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+
+    eligible = list(session.scalars(
+        select(Email).where(
+            Email.id.in_(body.email_ids),
+            Email.classification_id.is_not(None),
+            Email.status.in_([EmailStatus.classified.value,
+                              EmailStatus.actioned.value]))))
+    if not eligible:
+        return {"processed": 0, "actioned": 0, "errors": 0}
+
+    session.execute(delete(EmailAction).where(
+        EmailAction.email_id.in_([e.id for e in eligible]),
+        EmailAction.dry_run.is_(True),
+        EmailAction.executed.is_(False)))
+    for email in eligible:
+        email.status = EmailStatus.classified.value
+    session.commit()
+
+    rules = rules_engine.load_enabled_rules(session)
+    try:
+        client = GmailClient(session, client_secret)
+    except GmailAuthError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    counts = {"processed": 0, "actioned": 0, "errors": 0}
+    try:
+        for email in eligible:
+            try:
+                await rules_engine.apply_rules_to_email(session, client, email, rules)
+                counts["processed"] += 1
+                if email.status == EmailStatus.actioned.value:
+                    counts["actioned"] += 1
+            except Exception:
+                counts["errors"] += 1
+    finally:
+        await client.aclose()
+    return counts
 
 
 @router.get("/stats")

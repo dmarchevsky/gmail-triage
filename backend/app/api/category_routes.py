@@ -63,6 +63,45 @@ def create_category(body: CategoryIn, session: Session = Depends(get_session)) -
     return serialize(category)
 
 
+class BulkCategoryIds(BaseModel):
+    category_ids: list[int]
+
+
+class BulkCategoryUpdate(BaseModel):
+    category_ids: list[int]
+    enabled: bool
+
+
+@router.delete("/bulk")
+def bulk_delete_categories(body: BulkCategoryIds,
+                           session: Session = Depends(get_session)) -> dict:
+    if not body.category_ids:
+        return {"deleted": 0}
+    categories = list(session.scalars(
+        select(Category).where(Category.id.in_(body.category_ids))))
+    for category in categories:
+        audit(session, "user", "category_deleted",
+              {"id": category.id, "name": category.name})
+        session.delete(category)
+    session.commit()
+    return {"deleted": len(categories)}
+
+
+@router.put("/bulk")
+def bulk_update_categories(body: BulkCategoryUpdate,
+                           session: Session = Depends(get_session)) -> dict:
+    if not body.category_ids:
+        return {"updated": 0}
+    categories = list(session.scalars(
+        select(Category).where(Category.id.in_(body.category_ids))))
+    for category in categories:
+        category.enabled = body.enabled
+    audit(session, "user", "categories_bulk_updated",
+          {"ids": body.category_ids, "enabled": body.enabled})
+    session.commit()
+    return {"updated": len(categories)}
+
+
 @router.put("/{category_id}")
 def update_category(category_id: int, body: CategoryIn,
                     session: Session = Depends(get_session)) -> dict:

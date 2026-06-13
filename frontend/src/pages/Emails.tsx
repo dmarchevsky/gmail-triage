@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Category, EmailList, EmailRow, get, post } from "../api";
-import { AsyncButton, Badge, Modal, actionLabel, fmtDate, pct } from "../components";
+import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, fmtDate, pct } from "../components";
 import { useToast } from "../toast";
 
 function statusTone(status: string): "ok" | "warn" | "error" | "neutral" {
@@ -171,6 +171,8 @@ export default function Emails() {
     confidence_max: "",
     q: "",
   });
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState<"reclassify" | null>(null);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -185,12 +187,65 @@ export default function Emails() {
 
   useEffect(() => {
     load();
+    setSelectedIds(new Set());
   }, [load]);
   useEffect(() => {
     get<Category[]>("/categories").then(setCategories);
   }, []);
 
   const totalPages = list ? Math.max(1, Math.ceil(list.total / list.page_size)) : 1;
+  const pageIds = list?.items.map((e) => e.id) ?? [];
+  const allChecked = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const someChecked = pageIds.some((id) => selectedIds.has(id));
+
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current)
+      selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleSelect = (id: number) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selectAll = () => setSelectedIds(new Set(pageIds));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const doBulkReclassify = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await post<{ queued: number; classified: number; skipped: number; errors: number }>(
+        "/emails/reclassify-bulk",
+        { email_ids: ids },
+      );
+      toast.success(
+        `Queued ${r.queued} emails for re-classification (${r.classified} done, ${r.errors} errors)`,
+      );
+      clearSelection();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doBulkRerunRules = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await post<{ processed: number; actioned: number; errors: number }>(
+        "/emails/rerun-rules-bulk",
+        { email_ids: ids },
+      );
+      toast.success(`Rules re-applied: ${r.processed} processed, ${r.actioned} actioned`);
+      clearSelection();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <div>
@@ -262,9 +317,32 @@ export default function Emails() {
         />
       </div>
 
+      <BulkActionBar
+        count={selectedIds.size}
+        onClear={clearSelection}
+        actions={[
+          {
+            label: "Re-classify (LLM + rules)",
+            onClick: async () => setBulkConfirm("reclassify"),
+          },
+          {
+            label: "Re-run rules only",
+            onClick: doBulkRerunRules,
+          },
+        ]}
+      />
+
       <table className="table emails-table">
         <thead>
           <tr>
+            <th>
+              <input
+                type="checkbox"
+                ref={selectAllRef}
+                checked={allChecked}
+                onChange={() => (allChecked ? clearSelection() : selectAll())}
+              />
+            </th>
             <th>Date</th>
             <th>Sender</th>
             <th>Subject</th>
@@ -278,6 +356,13 @@ export default function Emails() {
         <tbody>
           {list?.items.map((e) => (
             <tr key={e.id} onClick={() => setOpen(e.id)} className="clickable">
+              <td onClick={(ev) => ev.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(e.id)}
+                  onChange={() => toggleSelect(e.id)}
+                />
+              </td>
               <td>{fmtDate(e.received_at)}</td>
               <td className="ellipsis">{e.sender}</td>
               <td className="ellipsis">{e.subject}</td>
@@ -308,7 +393,7 @@ export default function Emails() {
           ))}
           {list && list.items.length === 0 && (
             <tr>
-              <td colSpan={8} className="sub">
+              <td colSpan={9} className="sub">
                 No emails match.
               </td>
             </tr>
@@ -334,6 +419,24 @@ export default function Emails() {
           categories={categories}
           onChanged={load}
           onClose={() => setOpen(null)}
+        />
+      )}
+
+      {bulkConfirm === "reclassify" && (
+        <ConfirmDialog
+          title={`Re-classify ${selectedIds.size} email(s)?`}
+          confirmLabel="Re-classify"
+          message={
+            <p>
+              This will re-run the LLM on <b>{selectedIds.size}</b> email(s) and may
+              incur costs. Existing dry-run actions will be discarded.
+            </p>
+          }
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkReclassify();
+          }}
+          onCancel={() => setBulkConfirm(null)}
         />
       )}
     </div>

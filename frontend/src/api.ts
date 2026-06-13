@@ -37,6 +37,8 @@ export const post = <T>(path: string, body?: unknown) =>
 export const put = <T>(path: string, body: unknown) =>
   api<T>(path, { method: "PUT", body: JSON.stringify(body) });
 export const del = <T>(path: string) => api<T>(path, { method: "DELETE" });
+export const delWithBody = <T>(path: string, body: unknown) =>
+  api<T>(path, { method: "DELETE", body: JSON.stringify(body) });
 
 export interface StatusResponse {
   ok: boolean;

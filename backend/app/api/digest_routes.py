@@ -82,6 +82,44 @@ def create_digest(body: DigestIn, session: Session = Depends(get_session)) -> di
     return serialize(digest)
 
 
+class BulkDigestIds(BaseModel):
+    digest_ids: list[int]
+
+
+class BulkDigestUpdate(BaseModel):
+    digest_ids: list[int]
+    enabled: bool
+
+
+@router.delete("/bulk")
+def bulk_delete_digests(body: BulkDigestIds,
+                        session: Session = Depends(get_session)) -> dict:
+    if not body.digest_ids:
+        return {"deleted": 0}
+    digests = list(session.scalars(select(Digest).where(Digest.id.in_(body.digest_ids))))
+    for digest in digests:
+        audit(session, "user", "digest_deleted", {"id": digest.id, "name": digest.name})
+        session.delete(digest)
+    session.commit()
+    digest_scheduler.reschedule_all()
+    return {"deleted": len(digests)}
+
+
+@router.put("/bulk")
+def bulk_update_digests(body: BulkDigestUpdate,
+                        session: Session = Depends(get_session)) -> dict:
+    if not body.digest_ids:
+        return {"updated": 0}
+    digests = list(session.scalars(select(Digest).where(Digest.id.in_(body.digest_ids))))
+    for digest in digests:
+        digest.enabled = body.enabled
+    audit(session, "user", "digests_bulk_updated",
+          {"ids": body.digest_ids, "enabled": body.enabled})
+    session.commit()
+    digest_scheduler.reschedule_all()
+    return {"updated": len(digests)}
+
+
 @router.put("/{digest_id}")
 def update_digest(digest_id: int, body: DigestIn,
                   session: Session = Depends(get_session)) -> dict:
@@ -107,6 +145,24 @@ def delete_digest(digest_id: int, session: Session = Depends(get_session)) -> di
     session.commit()
     digest_scheduler.reschedule_all()
     return {"deleted": digest_id}
+
+
+@router.post("/bulk-send")
+async def bulk_send_digests(body: BulkDigestIds,
+                            session: Session = Depends(get_session)) -> dict:
+    """Send selected digests immediately (no preview)."""
+    if not body.digest_ids:
+        return {"sent": 0, "errors": []}
+    digests = list(session.scalars(select(Digest).where(Digest.id.in_(body.digest_ids))))
+    sent = 0
+    errors = []
+    for digest in digests:
+        try:
+            await run_digest(session, digest, actor="user", preview=False)
+            sent += 1
+        except Exception as e:
+            errors.append({"digest_id": digest.id, "error": str(e)[:200]})
+    return {"sent": sent, "errors": errors}
 
 
 @router.post("/{digest_id}/run-now")

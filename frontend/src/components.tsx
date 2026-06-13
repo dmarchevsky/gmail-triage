@@ -152,6 +152,46 @@ export function DiffView({ oldText, newText }: { oldText: string; newText: strin
   );
 }
 
+// ── Bulk action bar ─────────────────────────────────────────────────────────
+
+export function BulkActionBar({
+  count,
+  actions,
+  onClear,
+}: {
+  count: number;
+  actions: { label: string; onClick: () => Promise<void>; danger?: boolean }[];
+  onClear: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (count === 0) return null;
+  return (
+    <div className="bulk-bar">
+      <span className="bulk-count">{count} selected</span>
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          className={a.danger ? "danger" : ""}
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await a.onClick();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {a.label}
+        </button>
+      ))}
+      <button className="icon-btn" disabled={busy} onClick={onClear}>
+        ✕ Clear
+      </button>
+    </div>
+  );
+}
+
 // ── Small async-action button with busy/error state ─────────────────────────
 
 export function AsyncButton({

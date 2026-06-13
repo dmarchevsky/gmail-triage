@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { Category, CriteriaVersion, del, get, post, put } from "../api";
-import { Badge, ConfirmDialog, DiffView, Modal, fmtDate } from "../components";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Category, CriteriaVersion, del, delWithBody, get, post, put } from "../api";
+import { Badge, BulkActionBar, ConfirmDialog, DiffView, Modal, fmtDate } from "../components";
 import { useToast } from "../toast";
 
 function CategoryEditor({
@@ -171,15 +171,67 @@ function HistoryViewer({
 }
 
 export default function Categories() {
+  const toast = useToast();
   const [categories, setCategories] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Category | null | "new">(null);
   const [history, setHistory] = useState<Category | null>(null);
   const [deleting, setDeleting] = useState<Category | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState<"delete" | null>(null);
 
   const load = useCallback(() => get<Category[]>("/categories").then(setCategories), []);
   useEffect(() => {
     load();
   }, [load]);
+
+  const allChecked =
+    categories.length > 0 && categories.every((c) => selectedIds.has(c.id));
+  const someChecked = categories.some((c) => selectedIds.has(c.id));
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current)
+      selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleSelect = (id: number) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selectAll = () => setSelectedIds(new Set(categories.map((c) => c.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const doBulkEnable = async (enabled: boolean) => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await put<{ updated: number }>("/categories/bulk", {
+        category_ids: ids,
+        enabled,
+      });
+      toast.success(`${r.updated} categor${r.updated === 1 ? "y" : "ies"} ${enabled ? "enabled" : "disabled"}`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await delWithBody<{ deleted: number }>("/categories/bulk", {
+        category_ids: ids,
+      });
+      toast.success(`${r.deleted} categor${r.deleted === 1 ? "y" : "ies"} deleted`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <div>
@@ -196,9 +248,31 @@ export default function Categories() {
         exists) to tune rule confidence thresholds empirically.
       </p>
 
+      <BulkActionBar
+        count={selectedIds.size}
+        onClear={clearSelection}
+        actions={[
+          { label: "Enable", onClick: async () => doBulkEnable(true) },
+          { label: "Disable", onClick: async () => doBulkEnable(false) },
+          {
+            label: "Delete",
+            danger: true,
+            onClick: async () => setBulkConfirm("delete"),
+          },
+        ]}
+      />
+
       <table className="table">
         <thead>
           <tr>
+            <th>
+              <input
+                type="checkbox"
+                ref={selectAllRef}
+                checked={allChecked}
+                onChange={() => (allChecked ? clearSelection() : selectAll())}
+              />
+            </th>
             <th>Name</th>
             <th>Gmail label</th>
             <th>Criteria (start)</th>
@@ -210,6 +284,13 @@ export default function Categories() {
         <tbody>
           {categories.map((c) => (
             <tr key={c.id}>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(c.id)}
+                  onChange={() => toggleSelect(c.id)}
+                />
+              </td>
               <td>
                 <b>{c.name}</b>
                 {c.description && <div className="sub">{c.description}</div>}
@@ -231,7 +312,7 @@ export default function Categories() {
           ))}
           {categories.length === 0 && (
             <tr>
-              <td colSpan={6} className="sub">
+              <td colSpan={7} className="sub">
                 No categories yet — create one to start classifying.
               </td>
             </tr>
@@ -251,7 +332,7 @@ export default function Categories() {
       )}
       {deleting && (
         <ConfirmDialog
-          title={`Delete category “${deleting.name}”?`}
+          title={`Delete category "${deleting.name}"?`}
           danger
           confirmLabel="Delete"
           message={
@@ -267,6 +348,25 @@ export default function Categories() {
             load();
           }}
           onCancel={() => setDeleting(null)}
+        />
+      )}
+      {bulkConfirm === "delete" && (
+        <ConfirmDialog
+          title={`Delete ${selectedIds.size} categor${selectedIds.size === 1 ? "y" : "ies"}?`}
+          danger
+          confirmLabel="Delete all"
+          message={
+            <p>
+              Emails keep their history but lose classification references. Rules
+              matching these categories will stop matching. Gmail labels are{" "}
+              <b>not</b> deleted.
+            </p>
+          }
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkDelete();
+          }}
+          onCancel={() => setBulkConfirm(null)}
         />
       )}
     </div>

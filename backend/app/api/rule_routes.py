@@ -68,6 +68,55 @@ def create_rule(body: RuleIn, session: Session = Depends(get_session)) -> dict:
     return serialize(rule, session)
 
 
+class ReorderBody(BaseModel):
+    ordered_ids: list[int]
+
+
+class BulkRuleIds(BaseModel):
+    rule_ids: list[int]
+
+
+class BulkRuleUpdate(BaseModel):
+    rule_ids: list[int]
+    enabled: bool | None = None
+    dry_run: bool | None = None
+
+
+class BulkTestBody(BaseModel):
+    rule_ids: list[int]
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+@router.delete("/bulk")
+def bulk_delete_rules(body: BulkRuleIds,
+                      session: Session = Depends(get_session)) -> dict:
+    if not body.rule_ids:
+        return {"deleted": 0}
+    rules = list(session.scalars(select(Rule).where(Rule.id.in_(body.rule_ids))))
+    for rule in rules:
+        audit(session, "user", "rule_deleted", {"id": rule.id, "name": rule.name})
+        session.delete(rule)
+    session.commit()
+    return {"deleted": len(rules)}
+
+
+@router.put("/bulk")
+def bulk_update_rules(body: BulkRuleUpdate,
+                      session: Session = Depends(get_session)) -> dict:
+    if not body.rule_ids:
+        return {"updated": 0}
+    rules = list(session.scalars(select(Rule).where(Rule.id.in_(body.rule_ids))))
+    for rule in rules:
+        if body.enabled is not None:
+            rule.enabled = body.enabled
+        if body.dry_run is not None:
+            rule.dry_run = body.dry_run
+    audit(session, "user", "rules_bulk_updated",
+          {"ids": body.rule_ids, "enabled": body.enabled, "dry_run": body.dry_run})
+    session.commit()
+    return {"updated": len(rules)}
+
+
 @router.put("/{rule_id}")
 def update_rule(rule_id: int, body: RuleIn,
                 session: Session = Depends(get_session)) -> dict:
@@ -92,8 +141,29 @@ def delete_rule(rule_id: int, session: Session = Depends(get_session)) -> dict:
     return {"deleted": rule_id}
 
 
-class ReorderBody(BaseModel):
-    ordered_ids: list[int]
+@router.post("/bulk-test")
+def bulk_test_rules(body: BulkTestBody,
+                    session: Session = Depends(get_session)) -> dict:
+    """Evaluate multiple rules against the last N classified emails. No execution."""
+    if not body.rule_ids:
+        return {"results": []}
+    rules = list(session.scalars(select(Rule).where(Rule.id.in_(body.rule_ids))))
+    emails = list(session.scalars(
+        select(Email).where(Email.status.in_(
+            [EmailStatus.classified.value, EmailStatus.actioned.value]))
+        .order_by(Email.received_at.desc()).limit(body.limit)))
+    results = []
+    for rule in rules:
+        matches = [
+            {"email_id": e.id, "subject": e.subject, "sender": e.sender,
+             "confidence": e.confidence,
+             "planned_actions": [a["type"] for a in rule.actions or []]}
+            for e in emails if rules_engine.rule_matches(rule, e)
+        ]
+        results.append({"rule_id": rule.id, "rule_name": rule.name,
+                        "tested": len(emails), "match_count": len(matches),
+                        "matches": matches})
+    return {"results": results}
 
 
 @router.post("/reorder")

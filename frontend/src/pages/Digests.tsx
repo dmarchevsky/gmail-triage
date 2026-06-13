@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
-import { Category, Digest, DigestRun, del, get, post, put } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Category, Digest, DigestRun, del, delWithBody, get, post, put } from "../api";
 import {
   AsyncButton,
   Badge,
+  BulkActionBar,
   ConfirmDialog,
   Modal,
   fmtDate,
@@ -221,6 +222,8 @@ export default function Digests() {
   const [editing, setEditing] = useState<Digest | null | "new">(null);
   const [history, setHistory] = useState<Digest | null>(null);
   const [deleting, setDeleting] = useState<Digest | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState<"delete" | "send" | null>(null);
   const toast = useToast();
 
   const load = useCallback(() => get<Digest[]>("/digests").then(setDigests), []);
@@ -232,6 +235,70 @@ export default function Digests() {
   const catNames = (ids: number[]) =>
     ids.map((id) => categories.find((c) => c.id === id)?.name ?? `#${id}`).join(", ");
 
+  const allChecked = digests.length > 0 && digests.every((d) => selectedIds.has(d.id));
+  const someChecked = digests.some((d) => selectedIds.has(d.id));
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current)
+      selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleSelect = (id: number) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selectAll = () => setSelectedIds(new Set(digests.map((d) => d.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const doBulkEnable = async (enabled: boolean) => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await put<{ updated: number }>("/digests/bulk", {
+        digest_ids: ids,
+        enabled,
+      });
+      toast.success(`${r.updated} digest${r.updated === 1 ? "" : "s"} ${enabled ? "enabled" : "disabled"}`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await delWithBody<{ deleted: number }>("/digests/bulk", {
+        digest_ids: ids,
+      });
+      toast.success(`${r.deleted} digest${r.deleted === 1 ? "" : "s"} deleted`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doBulkSend = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await post<{ sent: number; errors: { digest_id: number; error: string }[] }>(
+        "/digests/bulk-send",
+        { digest_ids: ids },
+      );
+      if (r.errors.length > 0)
+        toast.error(`Sent ${r.sent}; ${r.errors.length} failed — check individual digests`);
+      else toast.success(`${r.sent} digest${r.sent === 1 ? "" : "s"} sent`);
+      clearSelection();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div>
       <header className="page-head">
@@ -241,9 +308,28 @@ export default function Digests() {
         </button>
       </header>
 
+      <BulkActionBar
+        count={selectedIds.size}
+        onClear={clearSelection}
+        actions={[
+          { label: "Enable", onClick: async () => doBulkEnable(true) },
+          { label: "Disable", onClick: async () => doBulkEnable(false) },
+          { label: "Send now", onClick: async () => setBulkConfirm("send") },
+          { label: "Delete", danger: true, onClick: async () => setBulkConfirm("delete") },
+        ]}
+      />
+
       <table className="table">
         <thead>
           <tr>
+            <th>
+              <input
+                type="checkbox"
+                ref={selectAllRef}
+                checked={allChecked}
+                onChange={() => (allChecked ? clearSelection() : selectAll())}
+              />
+            </th>
             <th>Name</th>
             <th>Schedule</th>
             <th>Categories</th>
@@ -255,6 +341,13 @@ export default function Digests() {
         <tbody>
           {digests.map((d) => (
             <tr key={d.id}>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(d.id)}
+                  onChange={() => toggleSelect(d.id)}
+                />
+              </td>
               <td>
                 <b>{d.name}</b>
               </td>
@@ -304,9 +397,9 @@ export default function Digests() {
           ))}
           {digests.length === 0 && (
             <tr>
-              <td colSpan={6} className="sub">
-                No digests. Example: “Market news — 07:00 & 16:00 — category MarketNews
-                — min confidence 0.8.”
+              <td colSpan={7} className="sub">
+                No digests. Example: "Market news — 07:00 &amp; 16:00 — category MarketNews
+                — min confidence 0.8."
               </td>
             </tr>
           )}
@@ -324,7 +417,7 @@ export default function Digests() {
       {history && <RunHistory digest={history} onClose={() => setHistory(null)} />}
       {deleting && (
         <ConfirmDialog
-          title={`Delete digest “${deleting.name}”?`}
+          title={`Delete digest "${deleting.name}"?`}
           danger
           confirmLabel="Delete"
           message={<p>Run history is removed as well.</p>}
@@ -334,6 +427,36 @@ export default function Digests() {
             load();
           }}
           onCancel={() => setDeleting(null)}
+        />
+      )}
+      {bulkConfirm === "send" && (
+        <ConfirmDialog
+          title={`Send ${selectedIds.size} digest${selectedIds.size === 1 ? "" : "s"} now?`}
+          confirmLabel="Send now"
+          message={
+            <p>
+              This will immediately send <b>{selectedIds.size}</b> digest
+              {selectedIds.size === 1 ? "" : "s"} via Telegram.
+            </p>
+          }
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkSend();
+          }}
+          onCancel={() => setBulkConfirm(null)}
+        />
+      )}
+      {bulkConfirm === "delete" && (
+        <ConfirmDialog
+          title={`Delete ${selectedIds.size} digest${selectedIds.size === 1 ? "" : "s"}?`}
+          danger
+          confirmLabel="Delete all"
+          message={<p>Run history is removed as well.</p>}
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkDelete();
+          }}
+          onCancel={() => setBulkConfirm(null)}
         />
       )}
     </div>

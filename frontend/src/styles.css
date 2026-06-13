@@ -359,6 +359,24 @@ tr.clickable:hover td {
   white-space: nowrap;
 }
 
+/* bulk action bar */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.bulk-count {
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+
 /* filters & pager */
 .filters {
   display: flex;
