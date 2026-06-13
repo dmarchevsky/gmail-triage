@@ -210,215 +210,6 @@ code {
   -webkit-overflow-scrolling: touch;
 }
 
-@media (max-width: 720px) {
-  /* Stacked-card table rows: no horizontal scroll. Each row becomes a card;
-     each cell becomes a "Label: value" line via its data-label attribute. */
-  .table-scroll,
-  .emails-scroll {
-    overflow-x: visible;
-  }
-  /* drop table formatting entirely so rows can be flex cards */
-  .table,
-  .table tbody {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    table-layout: auto;
-  }
-  .table {
-    border: none;
-    background: transparent;
-  }
-  .table thead {
-    display: none;
-  }
-
-  /* Each row is a compact card; cells flow (flex-wrap) and are reordered
-     per table into title / subline / chips / actions. */
-  .table tbody tr {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.1rem 0.5rem;
-    position: relative;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card);
-    margin-bottom: 0.5rem;
-    padding: 0.5rem 0.65rem;
-    max-width: 100%;
-  }
-  .table td {
-    border: none;
-    padding: 0;
-    width: auto;
-    min-width: 0;
-    max-width: 100%;
-    white-space: normal;
-    overflow: visible;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-    font-size: 0.84rem;
-    order: 2; /* default = meta chip; title/subline/actions override below */
-  }
-  /* default cell = a "Label: value" chip */
-  .table td[data-label]::before {
-    content: attr(data-label) ": ";
-    color: var(--muted);
-    font-weight: 600;
-    margin-right: 0.15rem;
-  }
-  .table td:empty {
-    display: none;
-  }
-  .table td[colspan] {
-    flex-basis: 100%;
-    text-align: center;
-    color: var(--muted);
-  }
-
-  /* ── Title cells: bold, full width, no label ── */
-  .emails-table td[data-label="Subject"],
-  .categories-table td[data-label="Name"],
-  .rules-table td[data-label="Name"],
-  .digests-table td[data-label="Name"],
-  .feedback-table td[data-label="Email"],
-  .precision-table td[data-label="Category"],
-  .activity-table td[data-label="Event"] {
-    order: 0;
-    flex: 1 0 100%;
-    font-weight: 600;
-    font-size: 0.98rem;
-    padding-right: 2rem; /* room for the corner control */
-  }
-  .emails-table td[data-label="Subject"]::before,
-  .categories-table td[data-label="Name"]::before,
-  .rules-table td[data-label="Name"]::before,
-  .digests-table td[data-label="Name"]::before,
-  .feedback-table td[data-label="Email"]::before,
-  .precision-table td[data-label="Category"]::before,
-  .activity-table td[data-label="Event"]::before {
-    display: none;
-  }
-
-  /* ── Subline cells: muted, no label, sit just under the title ── */
-  .emails-table td[data-label="Sender"],
-  .emails-table td[data-label="Date"],
-  .categories-table td[data-label="Gmail label"],
-  .rules-table td[data-label="Match"],
-  .digests-table td[data-label="Schedule"],
-  .feedback-table td[data-label="When"],
-  .activity-table td[data-label="Time"],
-  .activity-table td[data-label="Actor"] {
-    order: 1;
-    color: var(--muted);
-    font-size: 0.82rem;
-  }
-  .emails-table td[data-label="Sender"]::before,
-  .emails-table td[data-label="Date"]::before,
-  .categories-table td[data-label="Gmail label"]::before,
-  .rules-table td[data-label="Match"]::before,
-  .digests-table td[data-label="Schedule"]::before,
-  .feedback-table td[data-label="When"]::before,
-  .activity-table td[data-label="Time"]::before,
-  .activity-table td[data-label="Actor"]::before {
-    display: none;
-  }
-  /* long sublines take their own line */
-  .emails-table td[data-label="Sender"],
-  .rules-table td[data-label="Match"],
-  .digests-table td[data-label="Schedule"] {
-    flex-basis: 100%;
-  }
-
-  /* badge cells read fine without a label */
-  .emails-table td[data-label="Status"]::before,
-  .rules-table td[data-label="Mode"]::before,
-  .rules-table td[data-label="Enabled"]::before,
-  .categories-table td[data-label="Enabled"]::before,
-  .digests-table td[data-label="Enabled"]::before {
-    display: none;
-  }
-
-  /* ── Action rows: full width at the bottom of the card ── */
-  .table td.row-actions {
-    order: 5;
-    flex-basis: 100%;
-    padding-top: 0.4rem;
-  }
-  .emails-table td[data-label="Actions"] {
-    order: 4;
-    flex-basis: 100%;
-  }
-  .activity-table td[data-label="Detail"] {
-    order: 4;
-    flex-basis: 100%;
-    font-family: monospace;
-    font-size: 0.72rem;
-    color: var(--muted);
-  }
-  .rules-table td.order-cell {
-    order: 3;
-  }
-
-  /* ── Corner controls ── */
-  /* Categories/Rules/Digests: bulk-select checkbox in the top-right corner. */
-  .categories-table td:first-child:not([colspan]),
-  .rules-table td:first-child:not([colspan]),
-  .digests-table td:first-child:not([colspan]) {
-    position: absolute;
-    top: 0.45rem;
-    right: 0.5rem;
-    padding: 0;
-  }
-  /* Emails: leading checkbox (top-left), trailing re-run icon (top-right),
-     so neither takes its own row and the subject sits between them. */
-  .emails-table td:first-child:not([colspan]) {
-    position: absolute;
-    top: 0.55rem;
-    left: 0.5rem;
-    padding: 0;
-  }
-  .emails-table td:last-child:not([colspan]) {
-    position: absolute;
-    top: 0.3rem;
-    right: 0.4rem;
-    padding: 0;
-  }
-  .emails-table td[data-label="Subject"] {
-    padding-left: 1.9rem;
-    padding-right: 2.6rem;
-    min-width: 0;
-  }
-
-  /* iOS zooms when input font < 16px; prevent that on focus */
-  input,
-  select,
-  textarea {
-    font-size: 16px;
-  }
-  /* larger touch targets */
-  button {
-    min-height: 40px;
-  }
-  .icon-btn {
-    min-height: 40px;
-    min-width: 40px;
-  }
-  .row-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    padding-top: 0.4rem;
-  }
-  .row-actions button {
-    margin-right: 0;
-  }
-  input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-  }
-}
 
 .page-head {
   display: flex;
@@ -597,58 +388,64 @@ tr.clickable:hover td {
    All columns get deterministic widths; Subject takes the remaining space
    with a guaranteed minimum. The table keeps a min-width and scrolls
    horizontally on narrow viewports instead of collapsing the Subject column. */
-.emails-scroll {
-  overflow-x: auto;
-}
+/* Desktop only: the fixed-width Emails table. On mobile the rows become
+   compact cards (see the max-width:720px block), so these must NOT apply
+   there — they live later in the file and would otherwise win on source
+   order and reintroduce the 940px min-width / horizontal scroll. */
+@media (min-width: 721px) {
+  .emails-scroll {
+    overflow-x: auto;
+  }
 
-.emails-table {
-  table-layout: fixed;
-  min-width: 940px;
-}
+  .emails-table {
+    table-layout: fixed;
+    min-width: 940px;
+  }
 
-.emails-table th,
-.emails-table td {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+  .emails-table th,
+  .emails-table td {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-.emails-table .col-check {
-  width: 34px;
-}
+  .emails-table .col-check {
+    width: 34px;
+  }
 
-.emails-table .col-date {
-  width: 92px;
-}
+  .emails-table .col-date {
+    width: 92px;
+  }
 
-.emails-table .col-sender {
-  width: 160px;
-}
+  .emails-table .col-sender {
+    width: 160px;
+  }
 
-/* Subject column (no class) = the single auto-width column; never below this. */
-.emails-table th:nth-child(4),
-.emails-table td:nth-child(4) {
-  min-width: 200px;
-}
+  /* Subject column (no class) = the single auto-width column; never below this. */
+  .emails-table th:nth-child(4),
+  .emails-table td:nth-child(4) {
+    min-width: 200px;
+  }
 
-.emails-table .col-cat {
-  width: 104px;
-}
+  .emails-table .col-cat {
+    width: 104px;
+  }
 
-.emails-table .col-conf {
-  width: 52px;
-}
+  .emails-table .col-conf {
+    width: 52px;
+  }
 
-.emails-table .col-status {
-  width: 124px;
-}
+  .emails-table .col-status {
+    width: 124px;
+  }
 
-.emails-table .col-acts {
-  width: 132px;
-}
+  .emails-table .col-acts {
+    width: 132px;
+  }
 
-.emails-table .col-rerun {
-  width: 44px;
+  .emails-table .col-rerun {
+    width: 44px;
+  }
 }
 
 @keyframes pulse {
@@ -1121,4 +918,215 @@ label.checkbox input {
   padding: 0.75rem;
   white-space: pre-wrap;
   font-size: 0.85rem;
+}
+
+/* === Mobile table cards (kept last so these win over desktop table rules on source order) === */
+@media (max-width: 720px) {
+  /* Stacked-card table rows: no horizontal scroll. Each row becomes a card;
+     each cell becomes a "Label: value" line via its data-label attribute. */
+  .table-scroll,
+  .emails-scroll {
+    overflow-x: visible;
+  }
+  /* drop table formatting entirely so rows can be flex cards */
+  .table,
+  .table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+  }
+  .table {
+    border: none;
+    background: transparent;
+  }
+  .table thead {
+    display: none;
+  }
+
+  /* Each row is a compact card; cells flow (flex-wrap) and are reordered
+     per table into title / subline / chips / actions. */
+  .table tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.1rem 0.5rem;
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.65rem;
+    max-width: 100%;
+  }
+  .table td {
+    border: none;
+    padding: 0;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font-size: 0.84rem;
+    order: 2; /* default = meta chip; title/subline/actions override below */
+  }
+  /* default cell = a "Label: value" chip */
+  .table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--muted);
+    font-weight: 600;
+    margin-right: 0.15rem;
+  }
+  .table td:empty {
+    display: none;
+  }
+  .table td[colspan] {
+    flex-basis: 100%;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  /* ── Title cells: bold, full width, no label ── */
+  .emails-table td[data-label="Subject"],
+  .categories-table td[data-label="Name"],
+  .rules-table td[data-label="Name"],
+  .digests-table td[data-label="Name"],
+  .feedback-table td[data-label="Email"],
+  .precision-table td[data-label="Category"],
+  .activity-table td[data-label="Event"] {
+    order: 0;
+    flex: 1 0 100%;
+    font-weight: 600;
+    font-size: 0.98rem;
+    padding-right: 2rem; /* room for the corner control */
+  }
+  .emails-table td[data-label="Subject"]::before,
+  .categories-table td[data-label="Name"]::before,
+  .rules-table td[data-label="Name"]::before,
+  .digests-table td[data-label="Name"]::before,
+  .feedback-table td[data-label="Email"]::before,
+  .precision-table td[data-label="Category"]::before,
+  .activity-table td[data-label="Event"]::before {
+    display: none;
+  }
+
+  /* ── Subline cells: muted, no label, sit just under the title ── */
+  .emails-table td[data-label="Sender"],
+  .emails-table td[data-label="Date"],
+  .categories-table td[data-label="Gmail label"],
+  .rules-table td[data-label="Match"],
+  .digests-table td[data-label="Schedule"],
+  .feedback-table td[data-label="When"],
+  .activity-table td[data-label="Time"],
+  .activity-table td[data-label="Actor"] {
+    order: 1;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  .emails-table td[data-label="Sender"]::before,
+  .emails-table td[data-label="Date"]::before,
+  .categories-table td[data-label="Gmail label"]::before,
+  .rules-table td[data-label="Match"]::before,
+  .digests-table td[data-label="Schedule"]::before,
+  .feedback-table td[data-label="When"]::before,
+  .activity-table td[data-label="Time"]::before,
+  .activity-table td[data-label="Actor"]::before {
+    display: none;
+  }
+  /* long sublines take their own line */
+  .emails-table td[data-label="Sender"],
+  .rules-table td[data-label="Match"],
+  .digests-table td[data-label="Schedule"] {
+    flex-basis: 100%;
+  }
+
+  /* badge cells read fine without a label */
+  .emails-table td[data-label="Status"]::before,
+  .rules-table td[data-label="Mode"]::before,
+  .rules-table td[data-label="Enabled"]::before,
+  .categories-table td[data-label="Enabled"]::before,
+  .digests-table td[data-label="Enabled"]::before {
+    display: none;
+  }
+
+  /* ── Action rows: full width at the bottom of the card ── */
+  .table td.row-actions {
+    order: 5;
+    flex-basis: 100%;
+    padding-top: 0.4rem;
+  }
+  .emails-table td[data-label="Actions"] {
+    order: 4;
+    flex-basis: 100%;
+  }
+  .activity-table td[data-label="Detail"] {
+    order: 4;
+    flex-basis: 100%;
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .rules-table td.order-cell {
+    order: 3;
+  }
+
+  /* ── Corner controls ── */
+  /* Categories/Rules/Digests: bulk-select checkbox in the top-right corner. */
+  .categories-table td:first-child:not([colspan]),
+  .rules-table td:first-child:not([colspan]),
+  .digests-table td:first-child:not([colspan]) {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.5rem;
+    padding: 0;
+  }
+  /* Emails: leading checkbox (top-left), trailing re-run icon (top-right),
+     so neither takes its own row and the subject sits between them. */
+  .emails-table td:first-child:not([colspan]) {
+    position: absolute;
+    top: 0.55rem;
+    left: 0.5rem;
+    padding: 0;
+  }
+  .emails-table td:last-child:not([colspan]) {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.4rem;
+    padding: 0;
+  }
+  .emails-table td[data-label="Subject"] {
+    padding-left: 1.9rem;
+    padding-right: 2.6rem;
+    min-width: 0;
+  }
+
+  /* iOS zooms when input font < 16px; prevent that on focus */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  /* larger touch targets */
+  button {
+    min-height: 40px;
+  }
+  .icon-btn {
+    min-height: 40px;
+    min-width: 40px;
+  }
+  .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding-top: 0.4rem;
+  }
+  .row-actions button {
+    margin-right: 0;
+  }
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+  }
 }
