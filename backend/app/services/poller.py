@@ -23,6 +23,7 @@ from app.services.gmail import (
     GmailAuthError,
     GmailClient,
     GmailHistoryExpired,
+    GmailNotFound,
 )
 from app.state import app_state
 
@@ -57,7 +58,13 @@ async def _persist_message(session: Session, client: GmailClient, message_id: st
     existing = session.scalar(select(Email).where(Email.gmail_message_id == message_id))
     if existing is not None:
         return False
-    msg = await client.get_message_metadata(message_id)
+    try:
+        msg = await client.get_message_metadata(message_id)
+    except GmailNotFound:
+        # Message was deleted/moved between the history record and this fetch.
+        # Skip it so one missing message can't abort (and stall) the whole poll.
+        log.info("message_gone_skipped", gmail_message_id=message_id)
+        return False
     meta = gmail.parse_message_meta(msg)
     labels = set(meta.pop("label_ids"))
     if "INBOX" not in labels or "SENT" in labels:

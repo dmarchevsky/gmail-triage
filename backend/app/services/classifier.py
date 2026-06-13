@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.logging_setup import get_logger
 from app.models import Category, Email, EmailStatus
 from app.services import gmail, llm, settings_service
-from app.services.gmail import GmailAuthError, GmailClient
+from app.services.gmail import GmailAuthError, GmailClient, GmailNotFound
 from app.services.matchers import sender_matches
 from app.state import app_state
 
@@ -67,7 +67,12 @@ async def fetch_body(session: Session, client: GmailClient, email: Email) -> str
 
 async def classify_email(session: Session, client: GmailClient, email: Email,
                          categories: list[Category], settings: dict) -> None:
-    body = await fetch_body(session, client, email)
+    try:
+        body = await fetch_body(session, client, email)
+    except GmailNotFound:
+        email.status = EmailStatus.error.value
+        email.error = "Message no longer available in Gmail"
+        return
     session.commit()  # release the body-hash write before the LLM await
     system, user, schema = build_classification_prompt(
         categories, email, body, int(settings["classify_body_max_chars"]))

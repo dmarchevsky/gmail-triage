@@ -204,8 +204,9 @@ class GmailClient:
                 last_exc = GmailError(f"{resp.status_code} {resp.text[:200]}")
                 continue
             if resp.status_code == 404:
-                raise GmailHistoryExpired() if "/history" in path else GmailError(
-                    f"404 for {path}")
+                if "/history" in path:
+                    raise GmailHistoryExpired()
+                raise GmailNotFound(f"404 for {path}")
             if resp.status_code >= 400:
                 raise GmailError(f"Gmail API {resp.status_code}: {resp.text[:300]}")
             return resp.json() if resp.content else {}
@@ -275,6 +276,11 @@ class GmailClient:
 
 class GmailHistoryExpired(GmailError):
     """startHistoryId too old (HTTP 404) — caller must do a full re-sync."""
+
+
+class GmailNotFound(GmailError):
+    """A specific resource (e.g. a message) 404'd — usually deleted/moved
+    between a history record and the fetch; safe to skip that item."""
 
 
 async def revoke_token(token: dict) -> None:

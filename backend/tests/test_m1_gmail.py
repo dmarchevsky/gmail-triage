@@ -294,3 +294,26 @@ def test_parse_message_meta_domain():
     meta = gmail.parse_message_meta(gmail_message("x", sender="X <x@Sub.Example.COM>"))
     assert meta["sender_domain"] == "sub.example.com"
     assert meta["received_at"].tzinfo is not None
+
+
+@respx.mock
+def test_incremental_sync_skips_missing_message(auth_client, db_session, connected):
+    """A 404 on one message (deleted/moved since the history record) must skip
+    that message, still process the rest, and advance historyId — not abort."""
+    connected.history_id = "100"
+    db_session.commit()
+    m_ok = gmail_message("ok1")
+    respx.get(f"{gmail.GMAIL_API}/history").respond(200, json={
+        "historyId": "200",
+        "history": [{"messagesAdded": [{"message": {"id": "gone1"}},
+                                       {"message": {"id": "ok1"}}]}]})
+    respx.get(f"{gmail.GMAIL_API}/messages/gone1").respond(404, json={"error": "nf"})
+    mock_metadata(m_ok)
+
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.status_code == 200
+    assert resp.json() == {"mode": "incremental", "new_emails": 1}
+
+    from app.models import GmailAuth
+    db_session.expire_all()
+    assert db_session.query(GmailAuth).one().history_id == "200"  # advanced past the gap

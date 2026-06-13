@@ -308,3 +308,21 @@ def test_reclassify_llm_down_503(auth_client, db_session, seeded):
 
 def test_reclassify_unknown_email_404(auth_client, connected):
     assert auth_client.post("/api/v1/emails/9999/reclassify").status_code == 404
+
+
+@respx.mock
+def test_classify_marks_error_when_message_deleted(auth_client, db_session, seeded):
+    """A 404 fetching the body (message deleted) marks the email error, not a
+    500 that aborts the batch."""
+    from app.services.gmail import GMAIL_API
+    respx.get(f"{GMAIL_API}/messages/m1").respond(404, json={"error": "nf"})
+    chat = respx.post(CHAT_URL)
+    resp = auth_client.post("/api/v1/classify/run-now")
+    assert resp.status_code == 200
+    assert resp.json()["errors"] == 1
+    assert chat.call_count == 0  # never reached the LLM
+
+    from app.models import Email
+    email = db_session.query(Email).one()
+    assert email.status == "error"
+    assert "no longer available" in email.error
