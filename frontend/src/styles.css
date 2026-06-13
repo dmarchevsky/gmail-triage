@@ -371,10 +371,15 @@ code {
 
 tr.clickable {
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-tr.clickable:hover td {
-  background: rgba(127, 127, 127, 0.07);
+/* Only show the hover background on devices with a real pointer; on touch
+   the :hover state sticks after a tap and leaves cells highlighted. */
+@media (hover: hover) and (pointer: fine) {
+  tr.clickable:hover td {
+    background: rgba(127, 127, 127, 0.07);
+  }
 }
 
 .ellipsis {
@@ -1082,23 +1087,19 @@ label.checkbox input {
     right: 0.5rem;
     padding: 0;
   }
-  /* Emails: leading checkbox (top-left), trailing re-run icon (top-right),
-     so neither takes its own row and the subject sits between them. */
+  /* Emails: bulk-select checkbox in the top-right corner; the per-row
+     re-classify icon is hidden on cards (it's still in the email detail). */
   .emails-table td:first-child:not([colspan]) {
     position: absolute;
     top: 0.55rem;
-    left: 0.5rem;
+    right: 0.5rem;
     padding: 0;
   }
   .emails-table td:last-child:not([colspan]) {
-    position: absolute;
-    top: 0.3rem;
-    right: 0.4rem;
-    padding: 0;
+    display: none;
   }
   .emails-table td[data-label="Subject"] {
-    padding-left: 1.9rem;
-    padding-right: 2.6rem;
+    padding-right: 2rem; /* clear the corner checkbox */
     min-width: 0;
   }
 
