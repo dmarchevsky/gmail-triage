@@ -217,13 +217,17 @@ code {
   .emails-scroll {
     overflow-x: visible;
   }
+  /* drop table formatting entirely so rows can be flex cards */
+  .table,
+  .table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+  }
   .table {
     border: none;
     background: transparent;
-    min-width: 0;
-  }
-  .emails-table {
-    min-width: 0;
   }
   .table thead {
     display: none;
@@ -357,8 +361,8 @@ code {
     order: 3;
   }
 
-  /* ── Corner controls: bulk-select checkbox / Emails re-run ── */
-  .emails-table td:first-child:not([colspan]),
+  /* ── Corner controls ── */
+  /* Categories/Rules/Digests: bulk-select checkbox in the top-right corner. */
   .categories-table td:first-child:not([colspan]),
   .rules-table td:first-child:not([colspan]),
   .digests-table td:first-child:not([colspan]) {
@@ -367,8 +371,24 @@ code {
     right: 0.5rem;
     padding: 0;
   }
-  .emails-table td:last-child {
-    order: 5;
+  /* Emails: leading checkbox (top-left), trailing re-run icon (top-right),
+     so neither takes its own row and the subject sits between them. */
+  .emails-table td:first-child:not([colspan]) {
+    position: absolute;
+    top: 0.55rem;
+    left: 0.5rem;
+    padding: 0;
+  }
+  .emails-table td:last-child:not([colspan]) {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.4rem;
+    padding: 0;
+  }
+  .emails-table td[data-label="Subject"] {
+    padding-left: 1.9rem;
+    padding-right: 2.6rem;
+    min-width: 0;
   }
 
   /* iOS zooms when input font < 16px; prevent that on focus */
