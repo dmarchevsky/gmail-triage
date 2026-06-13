@@ -7,6 +7,7 @@ import {
   LabelPill,
   Modal,
   actionLabel,
+  conf,
   pct,
 } from "../components";
 import { useToast } from "../toast";
@@ -299,7 +300,7 @@ function TestResults({ rule, onClose }: { rule: Rule; onClose: () => void }) {
           <ul>
             {result.matches.map((m) => (
               <li key={m.email_id}>
-                {m.subject} <span className="sub">({m.sender}, {pct(m.confidence)})</span>
+                {m.subject} <span className="sub">({m.sender}, {conf(m.confidence)})</span>
               </li>
             ))}
           </ul>
@@ -337,7 +338,7 @@ function BulkTestResultsModal({
                 <li key={m.email_id}>
                   {m.subject}{" "}
                   <span className="sub">
-                    ({m.sender}, {pct(m.confidence)})
+                    ({m.sender}, {conf(m.confidence)})
                   </span>
                 </li>
               ))}

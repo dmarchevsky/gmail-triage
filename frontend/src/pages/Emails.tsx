@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Category, EmailList, EmailRow, StatusResponse, get, post } from "../api";
-import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, fmtDate, pct } from "../components";
+import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
 function statusTone(status: string): "ok" | "warn" | "error" | "neutral" {
@@ -103,7 +103,7 @@ function EmailDetail({
         <p className="snippet">{email.snippet}</p>
         <p>
           Classification: <b>{email.classification ?? "none"}</b> ·{" "}
-          {pct(email.confidence)} confidence
+          {conf(email.confidence)} confidence
           {email.llm_model ? ` · ${email.llm_model}` : ""}
         </p>
         {email.rationale && (
@@ -372,7 +372,6 @@ export default function Emails() {
             <th className="col-conf">Conf.</th>
             <th className="col-status">Status</th>
             <th className="col-acts">Actions</th>
-            <th className="col-rerun"></th>
           </tr>
         </thead>
         <tbody>
@@ -389,33 +388,17 @@ export default function Emails() {
               <td data-label="Sender" className="ellipsis">{e.sender}</td>
               <td data-label="Subject" className="ellipsis">{e.subject}</td>
               <td data-label="Category">{e.classification ?? "—"}</td>
-              <td data-label="Conf.">{pct(e.confidence)}</td>
+              <td data-label="Conf.">{conf(e.confidence)}</td>
               <td data-label="Status">
                 <Badge tone={statusTone(e.status)}>{e.status}</Badge>{" "}
                 {e.dry_run && e.actions.length > 0 && <Badge tone="dry">dry</Badge>}
               </td>
               <td data-label="Actions">{e.actions.map((a) => actionLabel(a.action_type)).join(", ") || "—"}</td>
-              <td onClick={(ev) => ev.stopPropagation()}>
-                <AsyncButton
-                  className="icon-btn"
-                  onClick={async () => {
-                    try {
-                      const updated = await post<EmailRow>(`/emails/${e.id}/reclassify`);
-                      toast.success(reclassifySummary(updated));
-                      await load();
-                    } catch (err) {
-                      toast.error(err instanceof Error ? err.message : String(err));
-                    }
-                  }}
-                >
-                  ↻
-                </AsyncButton>
-              </td>
             </tr>
           ))}
           {list && list.items.length === 0 && (
             <tr>
-              <td colSpan={9} className="sub">
+              <td colSpan={8} className="sub">
                 No emails match.
               </td>
             </tr>

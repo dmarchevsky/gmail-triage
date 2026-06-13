@@ -137,9 +137,18 @@ function SidebarStatus() {
 function Shell() {
   const { settings } = useApp();
   const [navOpen, setNavOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("sidebarCollapsed") === "1",
+  );
   const location = useLocation();
   // Close the mobile nav drawer whenever the route changes.
   useEffect(() => setNavOpen(false), [location.pathname]);
+
+  const toggleCollapsed = () =>
+    setCollapsed((c) => {
+      localStorage.setItem("sidebarCollapsed", c ? "0" : "1");
+      return !c;
+    });
 
   if (settings && !settings.first_run_complete) {
     return (
@@ -151,7 +160,7 @@ function Shell() {
   }
   const closeNav = () => setNavOpen(false);
   return (
-    <div className="shell">
+    <div className={`shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <div className="mobile-bar">
         <button
           className="icon-btn hamburger"
@@ -164,8 +173,26 @@ function Shell() {
         <span className="mobile-title">MailTriage</span>
       </div>
       {navOpen && <div className="nav-backdrop" onClick={closeNav} />}
+      <button
+        className="sidebar-expand icon-btn"
+        onClick={toggleCollapsed}
+        title="Expand sidebar"
+        aria-label="Expand sidebar"
+      >
+        »
+      </button>
       <aside className={`sidebar ${navOpen ? "open" : ""}`}>
-        <h1 className="logo">MailTriage</h1>
+        <div className="logo-row">
+          <h1 className="logo">MailTriage</h1>
+          <button
+            className="collapse-btn icon-btn"
+            onClick={toggleCollapsed}
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+          >
+            «
+          </button>
+        </div>
         <nav onClick={closeNav}>
           <NavLink to="/">Dashboard</NavLink>
           <NavLink to="/emails">Emails</NavLink>

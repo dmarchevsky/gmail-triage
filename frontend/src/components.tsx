@@ -164,6 +164,11 @@ export function fmtDate(iso: string | null | undefined): string {
   });
 }
 
+export function conf(x: number | null | undefined): string {
+  // classification confidence as a 0–1 number, one decimal (e.g. 0.8)
+  return x == null ? "—" : x.toFixed(1);
+}
+
 export function pct(x: number | null | undefined): string {
   return x == null ? "—" : `${Math.round(x * 100)}%`;
 }

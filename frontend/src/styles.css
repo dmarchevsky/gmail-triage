@@ -106,9 +106,51 @@ code {
   height: 100vh;
 }
 
+.logo-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .logo {
   font-size: 1.2rem;
   margin: 0;
+}
+
+/* Sidebar collapse is a desktop-only affordance (mobile uses the drawer). */
+.collapse-btn,
+.sidebar-expand {
+  display: none;
+}
+
+@media (min-width: 721px) {
+  .collapse-btn {
+    display: inline-flex;
+    margin-left: auto;
+    font-size: 1.1rem;
+    line-height: 1;
+  }
+  .shell.sidebar-collapsed .sidebar {
+    display: none;
+  }
+  .shell.sidebar-collapsed .sidebar-expand {
+    display: inline-flex;
+    position: fixed;
+    top: 0.6rem;
+    left: 0.4rem;
+    z-index: 30;
+    width: 34px;
+    height: 36px;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .shell.sidebar-collapsed .content {
+    padding-left: 2.6rem;
+  }
 }
 
 .sidebar nav {
@@ -437,7 +479,9 @@ tr.clickable {
   }
 
   .emails-table .col-conf {
-    width: 52px;
+    width: 64px;
+    overflow: visible; /* always show the full confidence number */
+    text-overflow: clip;
   }
 
   .emails-table .col-status {
@@ -446,10 +490,6 @@ tr.clickable {
 
   .emails-table .col-acts {
     width: 132px;
-  }
-
-  .emails-table .col-rerun {
-    width: 44px;
   }
 }
 
@@ -1156,16 +1196,12 @@ label.checkbox input {
     right: 0.5rem;
     padding: 0;
   }
-  /* Emails: bulk-select checkbox in the top-right corner; the per-row
-     re-classify icon is hidden on cards (it's still in the email detail). */
+  /* Emails: bulk-select checkbox in the top-right corner. */
   .emails-table td:first-child:not([colspan]) {
     position: absolute;
     top: 0.55rem;
     right: 0.5rem;
     padding: 0;
-  }
-  .emails-table td:last-child:not([colspan]) {
-    display: none;
   }
   .emails-table td[data-label="Subject"] {
     padding-right: 2rem; /* clear the corner checkbox */
