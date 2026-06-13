@@ -14,3 +14,8 @@ backend/static/
 .ruff_cache/
 *.egg-info/
 dist/
+# database backups / dumps (may contain encrypted secrets)
+*-backup-*.db
+*-backup-*.sql.gz
+*.sql.gz
+*.dump
