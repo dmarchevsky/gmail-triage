@@ -211,17 +211,70 @@ code {
 }
 
 @media (max-width: 720px) {
-  .table-scroll > .table {
-    min-width: 640px;
+  /* Stacked-card table rows: no horizontal scroll. Each row becomes a card;
+     each cell becomes a "Label: value" line via its data-label attribute. */
+  .table-scroll,
+  .emails-scroll {
+    overflow-x: visible;
   }
-  .table-scroll.wide > .table {
-    min-width: 880px;
+  .table {
+    border: none;
+    background: transparent;
+    font-size: 0.92rem;
   }
-  /* keep wrapped-table cells to a single line so columns stay aligned */
-  .table-scroll .table th,
-  .table-scroll .table td {
-    white-space: nowrap;
+  .table thead {
+    display: none;
   }
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+  .emails-table,
+  .table {
+    min-width: 0;
+  }
+  .table tr {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    margin-bottom: 0.6rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .table tr:last-child td {
+    border-bottom: none;
+  }
+  .table td {
+    border: none;
+    padding: 0.22rem 0;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
+  }
+  /* the Emails fixed-width helpers must not constrain stacked cells */
+  .emails-table td,
+  .emails-table th:nth-child(4),
+  .emails-table td:nth-child(4) {
+    width: auto;
+    min-width: 0;
+  }
+  .table td[data-label]::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+    color: var(--muted);
+    margin-right: 0.4rem;
+  }
+  .table td:empty {
+    display: none;
+  }
+  /* empty-state row spanning all columns */
+  .table td[colspan] {
+    text-align: center;
+  }
+
   /* iOS zooms when input font < 16px; prevent that on focus */
   input,
   select,
@@ -240,6 +293,7 @@ code {
     display: flex;
     flex-wrap: wrap;
     gap: 0.35rem;
+    padding-top: 0.4rem;
   }
   .row-actions button {
     margin-right: 0;

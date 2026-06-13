@@ -342,15 +342,15 @@ export default function Digests() {
                   onChange={() => toggleSelect(d.id)}
                 />
               </td>
-              <td>
+              <td data-label="Name">
                 <b>{d.name}</b>
               </td>
-              <td>
+              <td data-label="Schedule">
                 {d.cron_times.join(", ")} <span className="sub">{d.timezone}</span>
               </td>
-              <td>{catNames(d.category_ids) || "—"}</td>
-              <td>{pct(d.min_confidence)}</td>
-              <td>{d.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Categories">{catNames(d.category_ids) || "—"}</td>
+              <td data-label="Min conf.">{pct(d.min_confidence)}</td>
+              <td data-label="Enabled">{d.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
               <td className="row-actions">
                 <AsyncButton
                   onClick={async () => {

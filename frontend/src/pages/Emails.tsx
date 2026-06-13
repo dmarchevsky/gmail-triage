@@ -385,16 +385,16 @@ export default function Emails() {
                   onChange={() => toggleSelect(e.id)}
                 />
               </td>
-              <td>{fmtDate(e.received_at)}</td>
-              <td className="ellipsis">{e.sender}</td>
-              <td className="ellipsis">{e.subject}</td>
-              <td>{e.classification ?? "—"}</td>
-              <td>{pct(e.confidence)}</td>
-              <td>
+              <td data-label="Date">{fmtDate(e.received_at)}</td>
+              <td data-label="Sender" className="ellipsis">{e.sender}</td>
+              <td data-label="Subject" className="ellipsis">{e.subject}</td>
+              <td data-label="Category">{e.classification ?? "—"}</td>
+              <td data-label="Conf.">{pct(e.confidence)}</td>
+              <td data-label="Status">
                 <Badge tone={statusTone(e.status)}>{e.status}</Badge>{" "}
                 {e.dry_run && e.actions.length > 0 && <Badge tone="dry">dry</Badge>}
               </td>
-              <td>{e.actions.map((a) => actionLabel(a.action_type)).join(", ") || "—"}</td>
+              <td data-label="Actions">{e.actions.map((a) => actionLabel(a.action_type)).join(", ") || "—"}</td>
               <td onClick={(ev) => ev.stopPropagation()}>
                 <AsyncButton
                   className="icon-btn"

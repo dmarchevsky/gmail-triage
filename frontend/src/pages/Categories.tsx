@@ -288,16 +288,16 @@ export default function Categories() {
                   onChange={() => toggleSelect(c.id)}
                 />
               </td>
-              <td>
+              <td data-label="Name">
                 <b>{c.name}</b>
                 {c.description && <div className="sub">{c.description}</div>}
               </td>
-              <td>
+              <td data-label="Gmail label">
                 <code>{c.gmail_label_name}</code>
               </td>
-              <td className="ellipsis criteria-preview">{c.criteria_md.slice(0, 80)}</td>
-              <td>v{c.criteria_version}</td>
-              <td>{c.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Criteria" className="ellipsis criteria-preview">{c.criteria_md.slice(0, 80)}</td>
+              <td data-label="Version">v{c.criteria_version}</td>
+              <td data-label="Enabled">{c.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
               <td className="row-actions">
                 <button onClick={() => setEditing(c)}>Edit</button>
                 <button onClick={() => setHistory(c)}>History</button>

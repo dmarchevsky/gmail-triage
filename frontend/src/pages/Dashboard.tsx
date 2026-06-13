@@ -145,10 +145,10 @@ export default function Dashboard() {
                 <tbody>
                   {stats.category_precision.map((p) => (
                     <tr key={p.category_id}>
-                      <td>{p.category}</td>
-                      <td>{p.classified_total}</td>
-                      <td>{p.flagged_wrong}</td>
-                      <td>{p.precision == null ? "—" : `${Math.round(p.precision * 100)}%`}</td>
+                      <td data-label="Category">{p.category}</td>
+                      <td data-label="Classified">{p.classified_total}</td>
+                      <td data-label="Flagged wrong">{p.flagged_wrong}</td>
+                      <td data-label="Precision">{p.precision == null ? "—" : `${Math.round(p.precision * 100)}%`}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -171,10 +171,10 @@ export default function Dashboard() {
             <tbody>
               {stats.recent_activity.map((a, i) => (
                 <tr key={i}>
-                  <td>{fmtDate(a.ts)}</td>
-                  <td>{a.actor}</td>
-                  <td>{a.event_type}</td>
-                  <td className="payload">{JSON.stringify(a.payload)}</td>
+                  <td data-label="Time">{fmtDate(a.ts)}</td>
+                  <td data-label="Actor">{a.actor}</td>
+                  <td data-label="Event">{a.event_type}</td>
+                  <td data-label="Detail" className="payload">{JSON.stringify(a.payload)}</td>
                 </tr>
               ))}
             </tbody>

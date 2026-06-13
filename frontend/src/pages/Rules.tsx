@@ -553,10 +553,10 @@ export default function Rules() {
                   ▼
                 </button>
               </td>
-              <td>
+              <td data-label="Name">
                 <b>{r.name}</b>
               </td>
-              <td>
+              <td data-label="Match">
                 {catName(r.match_category_id)} · ≥{pct(r.match_min_confidence)}
                 {r.match_sender_pattern && (
                   <div className="sub">
@@ -565,8 +565,8 @@ export default function Rules() {
                   </div>
                 )}
               </td>
-              <td>{r.actions.map((a) => actionLabel(a.type)).join(", ")}</td>
-              <td>
+              <td data-label="Actions">{r.actions.map((a) => actionLabel(a.type)).join(", ")}</td>
+              <td data-label="Mode">
                 {r.dry_run ? <Badge tone="dry">DRY RUN</Badge> : <Badge tone="ok">LIVE</Badge>}
                 {r.pending_planned > 0 && (
                   <div className="sub">
@@ -582,8 +582,8 @@ export default function Rules() {
                   </div>
                 )}
               </td>
-              <td>{r.stop_processing ? "stop" : "continue"}</td>
-              <td>{r.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Flow">{r.stop_processing ? "stop" : "continue"}</td>
+              <td data-label="Enabled">{r.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
               <td className="row-actions">
                 {r.dry_run ? (
                   <button onClick={() => setGoingLive(r)}>Go live</button>

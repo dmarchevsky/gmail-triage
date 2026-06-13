@@ -126,12 +126,12 @@ export default function FeedbackQueue() {
         <tbody>
           {items.map((f) => (
             <tr key={f.id}>
-              <td>{fmtDate(f.created_at)}</td>
-              <td className="ellipsis">{f.email_subject}</td>
-              <td>{f.original_category ?? "none"}</td>
-              <td>{f.correct_category ?? "none"}</td>
-              <td className="ellipsis">{f.user_note}</td>
-              <td>
+              <td data-label="When">{fmtDate(f.created_at)}</td>
+              <td data-label="Email" className="ellipsis">{f.email_subject}</td>
+              <td data-label="Was">{f.original_category ?? "none"}</td>
+              <td data-label="Should be">{f.correct_category ?? "none"}</td>
+              <td data-label="Note" className="ellipsis">{f.user_note}</td>
+              <td data-label="Proposal">
                 <Badge
                   tone={
                     f.proposal_status === "pending_review"
