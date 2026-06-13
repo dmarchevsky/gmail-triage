@@ -18,6 +18,7 @@ from app.api import (
     email_routes,
     feedback_routes,
     gmail_routes,
+    label_routes,
     llm_routes,
     poller_routes,
     rule_routes,
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(gmail_routes.router, prefix=api_prefix)
     app.include_router(poller_routes.router, prefix=api_prefix)
     app.include_router(category_routes.router, prefix=api_prefix)
+    app.include_router(label_routes.router, prefix=api_prefix)
     app.include_router(llm_routes.router, prefix=api_prefix)
     app.include_router(rule_routes.router, prefix=api_prefix)
     app.include_router(email_routes.router, prefix=api_prefix)

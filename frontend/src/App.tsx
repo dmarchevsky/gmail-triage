@@ -12,6 +12,7 @@ import { ToastProvider } from "./toast";
 import Dashboard from "./pages/Dashboard";
 import Emails from "./pages/Emails";
 import Categories from "./pages/Categories";
+import Labels from "./pages/Labels";
 import Rules from "./pages/Rules";
 import Digests from "./pages/Digests";
 import FeedbackQueue from "./pages/FeedbackQueue";
@@ -169,6 +170,7 @@ function Shell() {
           <NavLink to="/">Dashboard</NavLink>
           <NavLink to="/emails">Emails</NavLink>
           <NavLink to="/categories">Categories</NavLink>
+          <NavLink to="/labels">Labels</NavLink>
           <NavLink to="/rules">Rules</NavLink>
           <NavLink to="/digests">Digests</NavLink>
           <NavLink to="/feedback">Feedback</NavLink>
@@ -183,6 +185,7 @@ function Shell() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/emails" element={<Emails />} />
           <Route path="/categories" element={<Categories />} />
+          <Route path="/labels" element={<Labels />} />
           <Route path="/rules" element={<Rules />} />
           <Route path="/digests" element={<Digests />} />
           <Route path="/feedback" element={<FeedbackQueue />} />

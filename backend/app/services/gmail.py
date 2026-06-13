@@ -220,12 +220,28 @@ class GmailClient:
     async def list_labels(self) -> list[dict]:
         return (await self._request("GET", "/labels")).get("labels", [])
 
-    async def create_label(self, name: str) -> dict:
-        return await self._request("POST", "/labels", json={
+    async def create_label(self, name: str, color: dict | None = None) -> dict:
+        body = {
             "name": name,
             "labelListVisibility": "labelShow",
             "messageListVisibility": "show",
-        })
+        }
+        if color:  # {"textColor": "#hex", "backgroundColor": "#hex"}
+            body["color"] = color
+        return await self._request("POST", "/labels", json=body)
+
+    async def patch_label(self, label_id: str, name: str | None = None,
+                          color: dict | None = None) -> dict:
+        body: dict = {}
+        if name is not None:
+            body["name"] = name
+        if color is not None:
+            body["color"] = color
+        return await self._request("PATCH", f"/labels/{label_id}", json=body)
+
+    async def delete_label(self, label_id: str) -> dict:
+        # Removes the label from all messages; does NOT delete any message.
+        return await self._request("DELETE", f"/labels/{label_id}")
 
     async def list_history(self, start_history_id: str, page_token: str | None = None) -> dict:
         params = {

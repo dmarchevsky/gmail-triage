@@ -103,7 +103,7 @@ def test_action_enum_closed_set(auth_client):
         assert resp.status_code == 422, f"action {bad!r} must be rejected"
     resp = auth_client.post("/api/v1/rules", json={
         "name": "bad-params", "actions": [{"type": "remove_label"}]})
-    assert resp.status_code == 422  # remove_label requires label_name
+    assert resp.status_code == 422  # remove_label requires label_id
 
 
 def test_no_send_capable_code_paths():
@@ -134,6 +134,9 @@ def pipeline(auth_client, db_session):
     cat = auth_client.post("/api/v1/categories", json={
         "name": "MarketNews", "criteria_md": "Market stuff."}).json()
 
+    from app.models import Label
+    label = Label(name="MailTriage/MarketNews")
+    db_session.add(label)
     db_session.add(Email(gmail_message_id="m1", sender="Brew <crew@brew.com>",
                          sender_domain="brew.com", subject="Stocks slide",
                          snippet="Futures fell", status="pending"))
@@ -141,7 +144,7 @@ def pipeline(auth_client, db_session):
     full = gmail_message("m1")
     full["payload"]["parts"] = [
         {"mimeType": "text/plain", "body": {"data": b64url("Body.")}}]
-    return {"category": cat, "full": full}
+    return {"category": cat, "label_id": label.id, "full": full}
 
 
 def classify_ok(category="MarketNews", confidence=0.9):
@@ -154,7 +157,7 @@ def test_dry_run_records_actions_no_gmail_mutation(auth_client, db_session, pipe
     auth_client.post("/api/v1/rules", json={
         "name": "label+archive", "match_category_id": pipeline["category"]["id"],
         "match_min_confidence": 0.8,
-        "actions": [{"type": "add_label", "category_id": pipeline["category"]["id"]},
+        "actions": [{"type": "add_label", "label_id": pipeline["label_id"]},
                     {"type": "mark_read"}, {"type": "archive"}]})
 
     respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])
@@ -185,7 +188,7 @@ def test_live_mode_executes_label_read_archive(auth_client, db_session, pipeline
     auth_client.post("/api/v1/rules", json={
         "name": "label+read+archive", "match_category_id": pipeline["category"]["id"],
         "dry_run": False,
-        "actions": [{"type": "add_label", "category_id": pipeline["category"]["id"]},
+        "actions": [{"type": "add_label", "label_id": pipeline["label_id"]},
                     {"type": "mark_read"}, {"type": "archive"}]})
 
     respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])
@@ -325,7 +328,7 @@ def dry_planned(auth_client, db_session, pipeline):
     """A dry rule that has recorded plans for one classified email."""
     rule = auth_client.post("/api/v1/rules", json={
         "name": "graduate me", "match_category_id": pipeline["category"]["id"],
-        "actions": [{"type": "add_label", "category_id": pipeline["category"]["id"]},
+        "actions": [{"type": "add_label", "label_id": pipeline["label_id"]},
                     {"type": "mark_read"}]}).json()
     with respx.mock:
         respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=pipeline["full"])

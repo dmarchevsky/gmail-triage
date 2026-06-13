@@ -69,13 +69,27 @@ class GmailAuth(Base):
                                                  onupdate=utcnow)
 
 
+class Label(Base):
+    """A Gmail label, applied to emails by rules. Separate from categories."""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    gmail_label_id: Mapped[str | None] = mapped_column(String(64))
+    text_color: Mapped[str | None] = mapped_column(String(16))
+    background_color: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
+                                                 onupdate=utcnow)
+
+
 class Category(Base):
     __tablename__ = "categories"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True)
     description: Mapped[str | None] = mapped_column(Text)
-    gmail_label_name: Mapped[str | None] = mapped_column(String(255))
     criteria_md: Mapped[str] = mapped_column(Text, default="")
     criteria_version: Mapped[int] = mapped_column(Integer, default=1)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

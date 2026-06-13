@@ -15,7 +15,6 @@ router = APIRouter(prefix="/categories")
 class CategoryIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
-    gmail_label_name: str | None = None
     criteria_md: str = ""
     enabled: bool = True
 
@@ -25,7 +24,6 @@ def serialize(c: Category) -> dict:
         "id": c.id,
         "name": c.name,
         "description": c.description,
-        "gmail_label_name": c.gmail_label_name or f"MailTriage/{c.name}",
         "criteria_md": c.criteria_md,
         "criteria_version": c.criteria_version,
         "enabled": c.enabled,
@@ -53,7 +51,6 @@ def create_category(body: CategoryIn, session: Session = Depends(get_session)) -
         raise HTTPException(status_code=409, detail="Category name already exists")
     category = Category(
         name=body.name, description=body.description,
-        gmail_label_name=body.gmail_label_name or f"MailTriage/{body.name}",
         criteria_md=body.criteria_md, enabled=body.enabled, criteria_version=1)
     session.add(category)
     session.flush()
@@ -115,8 +112,6 @@ def update_category(category_id: int, body: CategoryIn,
     criteria_changed = body.criteria_md != category.criteria_md
     category.name = body.name
     category.description = body.description
-    if body.gmail_label_name:
-        category.gmail_label_name = body.gmail_label_name
     category.enabled = body.enabled
     if criteria_changed:
         category.criteria_md = body.criteria_md
@@ -137,6 +132,43 @@ def delete_category(category_id: int, session: Session = Depends(get_session)) -
     session.delete(category)
     session.commit()
     return {"deleted": category_id}
+
+
+class QuickLabelIn(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    text_color: str | None = None
+    background_color: str | None = None
+    min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+@router.post("/{category_id}/quick-label", status_code=201)
+def quick_label(category_id: int, body: QuickLabelIn,
+                session: Session = Depends(get_session)) -> dict:
+    """Create a Label and a dry-run Rule that applies it to this category."""
+    from app.models import Label, Rule
+    from app.services import labels as labels_service
+
+    category = session.get(Category, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if not labels_service.is_allowed_color(body.text_color, body.background_color):
+        raise HTTPException(status_code=400, detail="Color not in the Gmail palette")
+    if session.scalar(select(Label).where(Label.name == body.name)):
+        raise HTTPException(status_code=409, detail="Label name already exists")
+
+    label = Label(name=body.name, text_color=body.text_color,
+                  background_color=body.background_color)
+    session.add(label)
+    session.flush()
+    rule = Rule(name=f"Label {category.name} → {label.name}",
+                match_category_id=category.id, match_min_confidence=body.min_confidence,
+                actions=[{"type": "add_label", "label_id": label.id}], dry_run=True)
+    session.add(rule)
+    session.flush()
+    audit(session, "user", "quick_label_created",
+          {"category_id": category.id, "label_id": label.id, "rule_id": rule.id})
+    session.commit()
+    return {"label_id": label.id, "rule_id": rule.id, "label_name": label.name}
 
 
 @router.post("/{category_id}/reclassify-preview")

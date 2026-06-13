@@ -14,9 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
-from app.models import Category, Email, EmailAction, EmailStatus, Rule
+from app.models import Email, EmailAction, EmailStatus, Label, Rule
 from app.services.audit import audit
 from app.services.gmail import GmailClient
+from app.services.labels import ensure_gmail_label
 from app.services.matchers import sender_matches
 
 log = get_logger(__name__)
@@ -32,15 +33,13 @@ class ActionType(StrEnum):
 
 class ActionSpec(BaseModel):
     type: ActionType
-    category_id: int | None = None   # add_label: label of this category
-    label_name: str | None = None    # add_label/remove_label: explicit label
+    label_id: int | None = None  # add_label/remove_label: the Label to apply
 
     @model_validator(mode="after")
     def check_params(self) -> "ActionSpec":
-        if self.type == ActionType.add_label and not (self.category_id or self.label_name):
-            raise ValueError("add_label requires category_id or label_name")
-        if self.type == ActionType.remove_label and not self.label_name:
-            raise ValueError("remove_label requires label_name")
+        if self.type in (ActionType.add_label, ActionType.remove_label) \
+                and self.label_id is None:
+            raise ValueError(f"{self.type.value} requires label_id")
         return self
 
 
@@ -84,46 +83,26 @@ def is_hard_rule(rule: Rule) -> bool:
                 and rule.match_category_id is None)
 
 
-class LabelManager:
-    """Ensures Gmail labels exist; caches name -> id for one client lifetime."""
-
-    def __init__(self, client: GmailClient):
-        self.client = client
-        self._cache: dict[str, str] | None = None
-
-    async def get_id(self, name: str) -> str:
-        if self._cache is None:
-            self._cache = {lb["name"]: lb["id"] for lb in await self.client.list_labels()}
-        if name not in self._cache:
-            created = await self.client.create_label(name)
-            self._cache[created["name"]] = created["id"]
-        return self._cache[name]
-
-
-async def _label_name_for_action(session: Session, action: dict) -> str | None:
-    if action.get("label_name"):
-        return action["label_name"]
-    if action.get("category_id"):
-        category = session.get(Category, action["category_id"])
-        if category:
-            return category.gmail_label_name or f"MailTriage/{category.name}"
+def _label_for_action(session: Session, action: dict) -> Label | None:
+    if action.get("label_id") is not None:
+        return session.get(Label, action["label_id"])
     return None
 
 
-async def _execute_action_set(client: GmailClient, labels: LabelManager,
+async def _execute_action_set(client: GmailClient, label_cache: dict,
                               session: Session, gmail_message_id: str,
                               actions: list[dict],
-                              label_names: list[str | None]) -> None:
-    """Resolve label ids and execute one batched modify (+trash) for an email."""
+                              labels: list[Label | None]) -> None:
+    """Resolve Gmail label ids and execute one batched modify (+trash)."""
     add_ids: list[str] = []
     remove_ids: list[str] = []
     trash = False
-    for action, name in zip(actions, label_names, strict=True):
+    for action, label in zip(actions, labels, strict=True):
         atype = ActionType(action["type"])
-        if atype == ActionType.add_label and name:
-            add_ids.append(await labels.get_id(name))
-        elif atype == ActionType.remove_label and name:
-            remove_ids.append(await labels.get_id(name))
+        if atype == ActionType.add_label and label is not None:
+            add_ids.append(await ensure_gmail_label(client, label_cache, label))
+        elif atype == ActionType.remove_label and label is not None:
+            remove_ids.append(await ensure_gmail_label(client, label_cache, label))
         elif atype == ActionType.mark_read:
             remove_ids.append("UNREAD")
         elif atype == ActionType.archive:
@@ -151,16 +130,12 @@ async def apply_rules_to_email(session: Session, client: GmailClient | None,
     if not planned:
         return 0
 
-    # Phase 1: resolve label names (reads only; session stays clean).
-    label_names: list[str | None] = []
-    for _rule, action in planned:
-        if ActionType(action["type"]) in (ActionType.add_label, ActionType.remove_label):
-            label_names.append(await _label_name_for_action(session, action))
-        else:
-            label_names.append(None)
+    # Phase 1: resolve target Labels (reads only; session stays clean).
+    labels: list[Label | None] = [_label_for_action(session, action)
+                                  for _rule, action in planned]
 
-    live = [(rule, action, name)
-            for (rule, action), name in zip(planned, label_names, strict=True)
+    live = [(rule, action, label)
+            for (rule, action), label in zip(planned, labels, strict=True)
             if not rule.dry_run]
 
     # Phase 2: execute the live subset before touching the session.
@@ -169,7 +144,7 @@ async def apply_rules_to_email(session: Session, client: GmailClient | None,
     if live and client is not None:
         try:
             await _execute_action_set(
-                client, LabelManager(client), session, email.gmail_message_id,
+                client, {}, session, email.gmail_message_id,
                 [a for _, a, _n in live], [n for _, _a, n in live])
         except Exception as e:
             live_ok = False
@@ -218,20 +193,17 @@ async def apply_planned_for_rule(session: Session, client: GmailClient,
     for row in rows:
         by_email.setdefault(row.email_id, []).append(row)
 
-    labels = LabelManager(client)
+    label_cache: dict = {}
     applied = failed = 0
     for email_id, action_rows in by_email.items():
         email = session.get(Email, email_id)
         if email is None:
             continue
         actions = [r.action_params or {"type": r.action_type} for r in action_rows]
-        label_names = [await _label_name_for_action(session, a)
-                       if ActionType(a["type"]) in (ActionType.add_label,
-                                                    ActionType.remove_label)
-                       else None for a in actions]
+        labels = [_label_for_action(session, a) for a in actions]
         try:
-            await _execute_action_set(client, labels, session,
-                                      email.gmail_message_id, actions, label_names)
+            await _execute_action_set(client, label_cache, session,
+                                      email.gmail_message_id, actions, labels)
         except Exception as e:
             for row in action_rows:
                 row.error = str(e)[:500]

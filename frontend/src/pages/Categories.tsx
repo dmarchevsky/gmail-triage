@@ -1,6 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, CriteriaVersion, del, delWithBody, get, post, put } from "../api";
-import { Badge, BulkActionBar, ConfirmDialog, DiffView, Modal, fmtDate } from "../components";
+import {
+  Category,
+  ColorSwatch,
+  CriteriaVersion,
+  del,
+  delWithBody,
+  get,
+  post,
+  put,
+} from "../api";
+import {
+  Badge,
+  BulkActionBar,
+  ColorChoice,
+  ConfirmDialog,
+  DiffView,
+  LabelPill,
+  Modal,
+  SwatchPicker,
+  fmtDate,
+  pct,
+} from "../components";
 import { useToast } from "../toast";
 
 function CategoryEditor({
@@ -16,14 +36,37 @@ function CategoryEditor({
   const [form, setForm] = useState({
     name: category?.name ?? "",
     description: category?.description ?? "",
-    gmail_label_name: category?.gmail_label_name ?? "",
     criteria_md: category?.criteria_md ?? "",
     enabled: category?.enabled ?? true,
   });
+  // Optional quick-create of a label + a dry-run rule (new categories only).
+  const [palette, setPalette] = useState<ColorSwatch[]>([]);
+  const [quick, setQuick] = useState(false);
+  const [quickName, setQuickName] = useState("");
+  const [quickColor, setQuickColor] = useState<ColorChoice>({ text: null, background: null });
+  const [quickConf, setQuickConf] = useState(0.8);
+
+  useEffect(() => {
+    if (!category) get<ColorSwatch[]>("/labels/palette").then(setPalette);
+  }, [category]);
+
   const save = async () => {
     try {
-      if (category) await put(`/categories/${category.id}`, form);
-      else await post("/categories", form);
+      let categoryId = category?.id;
+      if (category) {
+        await put(`/categories/${category.id}`, form);
+      } else {
+        const created = await post<Category>("/categories", form);
+        categoryId = created.id;
+      }
+      if (!category && quick && quickName.trim() && categoryId) {
+        await post(`/categories/${categoryId}/quick-label`, {
+          name: quickName.trim(),
+          text_color: quickColor.text,
+          background_color: quickColor.background,
+          min_confidence: quickConf,
+        });
+      }
       toast.success(category ? "Category updated" : "Category created");
       onSaved();
       onClose();
@@ -35,19 +78,11 @@ function CategoryEditor({
   return (
     <Modal title={category ? `Edit ${category.name}` : "New category"} onClose={onClose} wide>
       <div className="form-grid">
-        <label>
+        <label className="span2">
           Name
           <input
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-        </label>
-        <label>
-          Gmail label
-          <input
-            placeholder={`MailTriage/${form.name || "…"}`}
-            value={form.gmail_label_name}
-            onChange={(e) => setForm({ ...form, gmail_label_name: e.target.value })}
           />
         </label>
         <label className="span2">
@@ -58,7 +93,7 @@ function CategoryEditor({
           />
         </label>
         <label className="span2">
-          Classification criteria (markdown — this text <i>is</i> the LLM prompt)
+          Classification criteria (markdown — this text is the LLM prompt)
           <textarea
             rows={10}
             value={form.criteria_md}
@@ -74,6 +109,54 @@ function CategoryEditor({
           />
           Enabled (included in classification prompt)
         </label>
+
+        {!category && (
+          <div className="span2 quick-label-box">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={quick}
+                onChange={(e) => setQuick(e.target.checked)}
+              />
+              Also create a label and a rule to apply it to this category
+            </label>
+            {quick && (
+              <div className="quick-label-fields">
+                <label>
+                  Label name
+                  <input
+                    placeholder={`MailTriage/${form.name || "…"}`}
+                    value={quickName}
+                    onChange={(e) => setQuickName(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Apply at confidence ≥ {pct(quickConf)}
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={quickConf}
+                    onChange={(e) => setQuickConf(Number(e.target.value))}
+                  />
+                </label>
+                <div>
+                  <p className="field-label">Color</p>
+                  <SwatchPicker palette={palette} selected={quickColor} onPick={setQuickColor} />
+                  <p className="sub" style={{ marginTop: "0.4rem" }}>
+                    <LabelPill
+                      name={quickName || "label"}
+                      textColor={quickColor.text}
+                      backgroundColor={quickColor.background}
+                    />{" "}
+                    — the rule starts in dry-run.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
@@ -141,7 +224,6 @@ function HistoryViewer({
                       await put(`/categories/${category.id}`, {
                         name: category.name,
                         description: category.description,
-                        gmail_label_name: category.gmail_label_name,
                         criteria_md: selectedVersion.criteria_md,
                         enabled: category.enabled,
                       });
@@ -271,7 +353,6 @@ export default function Categories() {
               />
             </th>
             <th>Name</th>
-            <th>Gmail label</th>
             <th>Criteria (start)</th>
             <th>Version</th>
             <th>Enabled</th>
@@ -292,9 +373,6 @@ export default function Categories() {
                 <b>{c.name}</b>
                 {c.description && <div className="sub">{c.description}</div>}
               </td>
-              <td data-label="Gmail label">
-                <code>{c.gmail_label_name}</code>
-              </td>
               <td data-label="Criteria" className="ellipsis criteria-preview">{c.criteria_md.slice(0, 80)}</td>
               <td data-label="Version">v{c.criteria_version}</td>
               <td data-label="Enabled">{c.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
@@ -309,7 +387,7 @@ export default function Categories() {
           ))}
           {categories.length === 0 && (
             <tr>
-              <td colSpan={7} className="sub">
+              <td colSpan={6} className="sub">
                 No categories yet — create one to start classifying.
               </td>
             </tr>

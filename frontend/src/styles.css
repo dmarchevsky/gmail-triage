@@ -748,6 +748,75 @@ label.checkbox input {
   margin-top: 0;
 }
 
+/* labels */
+.label-pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.action-chip {
+  white-space: nowrap;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+}
+
+.swatch.none {
+  background: var(--card);
+  color: var(--muted);
+  border: 1px dashed var(--border);
+}
+
+.swatch.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.quick-label-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: rgba(127, 127, 127, 0.05);
+}
+
+.quick-label-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+}
+
+.quick-label-fields > div {
+  grid-column: span 2;
+}
+
+@media (max-width: 640px) {
+  .quick-label-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* toasts */
 .toast-stack {
   position: fixed;

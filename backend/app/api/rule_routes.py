@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import Email, EmailAction, EmailStatus, Rule
+from app.models import Email, EmailAction, EmailStatus, Label, Rule
 from app.services import rules as rules_engine
 from app.services.audit import audit
 
@@ -40,13 +40,37 @@ def _pending_planned(session: Session, rule_id: int) -> int:
         EmailAction.executed.is_(False))) or 0
 
 
+def _validate_label_ids(session: Session, actions: list[dict]) -> None:
+    ids = {a["label_id"] for a in actions if a.get("label_id") is not None}
+    if not ids:
+        return
+    found = set(session.scalars(select(Label.id).where(Label.id.in_(ids))))
+    missing = ids - found
+    if missing:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown label id(s): {sorted(missing)}")
+
+
 def serialize(r: Rule, session: Session) -> dict:
+    # enrich label actions with the label's name + color for the UI
+    label_ids = {a["label_id"] for a in (r.actions or []) if a.get("label_id")}
+    label_map = {lb.id: lb for lb in session.scalars(
+        select(Label).where(Label.id.in_(label_ids)))} if label_ids else {}
+    actions = []
+    for a in r.actions or []:
+        a = dict(a)
+        lb = label_map.get(a.get("label_id"))
+        if lb is not None:
+            a["label_name"] = lb.name
+            a["text_color"] = lb.text_color
+            a["background_color"] = lb.background_color
+        actions.append(a)
     return {
         "id": r.id, "name": r.name, "enabled": r.enabled, "priority": r.priority,
         "match_category_id": r.match_category_id,
         "match_min_confidence": r.match_min_confidence,
         "match_sender_pattern": r.match_sender_pattern,
-        "actions": r.actions, "stop_processing": r.stop_processing,
+        "actions": actions, "stop_processing": r.stop_processing,
         "dry_run": r.dry_run,
         "pending_planned": _pending_planned(session, r.id),
     }
@@ -60,6 +84,7 @@ def list_rules(session: Session = Depends(get_session)) -> list[dict]:
 
 @router.post("", status_code=201)
 def create_rule(body: RuleIn, session: Session = Depends(get_session)) -> dict:
+    _validate_label_ids(session, body.actions)
     rule = Rule(**body.model_dump())
     session.add(rule)
     session.flush()
@@ -123,6 +148,7 @@ def update_rule(rule_id: int, body: RuleIn,
     rule = session.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
+    _validate_label_ids(session, body.actions)
     for key, value in body.model_dump().items():
         setattr(rule, key, value)
     audit(session, "user", "rule_updated", {"id": rule.id})

@@ -60,7 +60,6 @@ export interface Category {
   id: number;
   name: string;
   description: string | null;
-  gmail_label_name: string;
   criteria_md: string;
   criteria_version: number;
   enabled: boolean;
@@ -76,10 +75,26 @@ export interface CriteriaVersion {
   created_at: string | null;
 }
 
+export interface Label {
+  id: number;
+  name: string;
+  gmail_label_id: string | null;
+  text_color: string | null;
+  background_color: string | null;
+}
+
+export interface ColorSwatch {
+  background: string;
+  text: string;
+}
+
 export interface RuleAction {
   type: "add_label" | "remove_label" | "mark_read" | "archive" | "trash";
-  category_id?: number;
+  label_id?: number;
+  // enrichment added by the API serializer for display:
   label_name?: string;
+  text_color?: string | null;
+  background_color?: string | null;
 }
 
 export interface Rule {

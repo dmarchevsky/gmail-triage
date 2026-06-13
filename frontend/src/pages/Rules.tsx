@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, Rule, RuleAction, del, delWithBody, get, post, put } from "../api";
-import { Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, pct } from "../components";
+import { Category, Label, Rule, RuleAction, del, delWithBody, get, post, put } from "../api";
+import {
+  Badge,
+  BulkActionBar,
+  ConfirmDialog,
+  LabelPill,
+  Modal,
+  actionLabel,
+  pct,
+} from "../components";
 import { useToast } from "../toast";
 
 const ACTION_TYPES: RuleAction["type"][] = [
@@ -13,11 +21,11 @@ const ACTION_TYPES: RuleAction["type"][] = [
 
 function ActionBuilder({
   actions,
-  categories,
+  labels,
   onChange,
 }: {
   actions: RuleAction[];
-  categories: Category[];
+  labels: Label[];
   onChange: (a: RuleAction[]) => void;
 }) {
   const update = (i: number, patch: Partial<RuleAction>) => {
@@ -25,6 +33,7 @@ function ActionBuilder({
     next[i] = { ...next[i], ...patch };
     onChange(next);
   };
+  const needsLabel = (t: string) => t === "add_label" || t === "remove_label";
   return (
     <div className="action-builder">
       {actions.map((a, i) => (
@@ -33,7 +42,10 @@ function ActionBuilder({
             value={a.type}
             onChange={(e) => {
               const type = e.target.value as RuleAction["type"];
-              const next: RuleAction = { type };
+              // keep label_id when switching between add/remove label
+              const next: RuleAction = needsLabel(type)
+                ? { type, label_id: a.label_id }
+                : { type };
               onChange(actions.map((x, j) => (j === i ? next : x)));
             }}
           >
@@ -43,32 +55,20 @@ function ActionBuilder({
               </option>
             ))}
           </select>
-          {a.type === "add_label" && (
+          {needsLabel(a.type) && (
             <select
-              value={a.category_id ? `cat:${a.category_id}` : a.label_name ? "custom" : ""}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v.startsWith("cat:"))
-                  update(i, { category_id: Number(v.slice(4)), label_name: undefined });
-                else update(i, { category_id: undefined, label_name: a.label_name ?? "" });
-              }}
+              value={a.label_id ?? ""}
+              onChange={(e) =>
+                update(i, { label_id: e.target.value ? Number(e.target.value) : undefined })
+              }
             >
               <option value="">label…</option>
-              {categories.map((c) => (
-                <option key={c.id} value={`cat:${c.id}`}>
-                  {c.gmail_label_name} (category)
+              {labels.map((lb) => (
+                <option key={lb.id} value={lb.id}>
+                  {lb.name}
                 </option>
               ))}
-              <option value="custom">custom label…</option>
             </select>
-          )}
-          {((a.type === "add_label" && a.category_id === undefined) ||
-            a.type === "remove_label") && (
-            <input
-              placeholder="Label name"
-              value={a.label_name ?? ""}
-              onChange={(e) => update(i, { label_name: e.target.value })}
-            />
           )}
           <button
             className="icon-btn"
@@ -80,6 +80,9 @@ function ActionBuilder({
         </div>
       ))}
       <button onClick={() => onChange([...actions, { type: "mark_read" }])}>+ Add action</button>
+      {labels.length === 0 && (
+        <p className="sub">No labels yet — create one on the Labels page to use "Add label".</p>
+      )}
     </div>
   );
 }
@@ -87,11 +90,13 @@ function ActionBuilder({
 function RuleEditor({
   rule,
   categories,
+  labels,
   onSaved,
   onClose,
 }: {
   rule: Rule | null;
   categories: Category[];
+  labels: Label[];
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -193,7 +198,7 @@ function RuleEditor({
           <p className="field-label">Actions</p>
           <ActionBuilder
             actions={form.actions}
-            categories={categories}
+            labels={labels}
             onChange={(actions) => setForm({ ...form, actions })}
           />
         </div>
@@ -363,6 +368,7 @@ export default function Rules() {
   const toast = useToast();
   const [rules, setRules] = useState<Rule[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [labels, setLabels] = useState<Label[]>([]);
   const [editing, setEditing] = useState<Rule | null | "new">(null);
   const [testing, setTesting] = useState<Rule | null>(null);
   const [deleting, setDeleting] = useState<Rule | null>(null);
@@ -406,6 +412,7 @@ export default function Rules() {
   useEffect(() => {
     load();
     get<Category[]>("/categories").then(setCategories);
+    get<Label[]>("/labels").then(setLabels);
   }, [load]);
 
   const move = async (index: number, delta: number) => {
@@ -565,7 +572,24 @@ export default function Rules() {
                   </div>
                 )}
               </td>
-              <td data-label="Actions">{r.actions.map((a) => actionLabel(a.type)).join(", ")}</td>
+              <td data-label="Actions">
+                {r.actions.map((a, idx) => (
+                  <span key={idx} className="action-chip">
+                    {actionLabel(a.type)}
+                    {a.label_name && (
+                      <>
+                        {" "}
+                        <LabelPill
+                          name={a.label_name}
+                          textColor={a.text_color}
+                          backgroundColor={a.background_color}
+                        />
+                      </>
+                    )}
+                    {idx < r.actions.length - 1 && ", "}
+                  </span>
+                ))}
+              </td>
               <td data-label="Mode">
                 {r.dry_run ? <Badge tone="dry">DRY RUN</Badge> : <Badge tone="ok">LIVE</Badge>}
                 {r.pending_planned > 0 && (
@@ -614,6 +638,7 @@ export default function Rules() {
         <RuleEditor
           rule={editing === "new" ? null : editing}
           categories={categories}
+          labels={labels}
           onSaved={load}
           onClose={() => setEditing(null)}
         />

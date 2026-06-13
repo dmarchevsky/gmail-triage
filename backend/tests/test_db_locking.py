@@ -136,6 +136,9 @@ def test_no_write_lock_held_during_gmail_action_calls(auth_client, db_session):
     db_session.commit()
     cat = auth_client.post("/api/v1/categories", json={
         "name": "MarketNews", "criteria_md": "m"}).json()
+    from app.models import Label
+    label = Label(name="MailTriage/MarketNews")
+    db_session.add(label)
     db_session.add(Email(gmail_message_id="m1", sender="Brew <crew@brew.com>",
                          sender_domain="brew.com", subject="s", snippet="x",
                          status="pending"))
@@ -146,7 +149,7 @@ def test_no_write_lock_held_during_gmail_action_calls(auth_client, db_session):
 
     auth_client.post("/api/v1/rules", json={
         "name": "r", "match_category_id": cat["id"], "dry_run": False,
-        "actions": [{"type": "add_label", "category_id": cat["id"]},
+        "actions": [{"type": "add_label", "label_id": label.id},
                     {"type": "archive"}]})
 
     respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=full)

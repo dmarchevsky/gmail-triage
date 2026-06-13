@@ -70,7 +70,6 @@ def test_category_crud_and_history(auth_client):
     assert resp.status_code == 201
     cat = resp.json()
     assert cat["criteria_version"] == 1
-    assert cat["gmail_label_name"] == "MailTriage/MarketNews"
 
     # duplicate name rejected
     assert auth_client.post("/api/v1/categories",

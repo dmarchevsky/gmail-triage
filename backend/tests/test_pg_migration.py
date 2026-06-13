@@ -109,3 +109,43 @@ def test_per_rule_dry_run_backfill_from_global_setting(tmp_path):
         assert conn.execute(text(
             "SELECT COUNT(*) FROM settings WHERE key IN "
             "('dry_run', 'dry_run_telegram_prefix')")).scalar() == 0
+
+
+def test_labels_split_from_categories_migration(tmp_path):
+    """Upgrading from pre-labels: a Label is created per category label and
+    rules' add_label actions are rewritten to label_id."""
+    import json
+
+    from alembic.config import Config as AlembicConfig
+    from sqlalchemy import create_engine, text
+
+    from alembic import command
+    from app.db import BACKEND_DIR
+
+    url = f"sqlite:///{tmp_path}/pre.db"
+    cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "bc67c32f9a96")  # last pre-labels revision
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO categories (name, criteria_md, criteria_version, enabled, "
+            "gmail_label_name, created_at, updated_at) VALUES "
+            "('MarketNews','m',1,1,'MailTriage/MarketNews','2026-01-01','2026-01-01')"))
+        conn.execute(text(
+            "INSERT INTO rules (name, enabled, priority, match_min_confidence, actions, "
+            "stop_processing, dry_run, created_at, updated_at) VALUES "
+            "('r',1,10,0,:a,1,1,'2026-01-01','2026-01-01')"),
+            {"a": json.dumps([{"type": "add_label", "category_id": 1},
+                              {"type": "mark_read"}])})
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        labels = conn.execute(text("SELECT id, name FROM labels")).fetchall()
+        assert [(r[0], r[1]) for r in labels] == [(1, "MailTriage/MarketNews")]
+        actions = json.loads(conn.execute(text("SELECT actions FROM rules")).scalar())
+        assert actions == [{"type": "add_label", "label_id": 1}, {"type": "mark_read"}]
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info(categories)"))]
+        assert "gmail_label_name" not in cols

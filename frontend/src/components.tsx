@@ -10,6 +10,68 @@ export const ACTION_LABELS: Record<string, string> = {
 
 export const actionLabel = (type: string): string => ACTION_LABELS[type] ?? type;
 
+export interface ColorChoice {
+  text: string | null;
+  background: string | null;
+}
+
+export function SwatchPicker({
+  palette,
+  selected,
+  onPick,
+}: {
+  palette: { background: string; text: string }[];
+  selected: ColorChoice;
+  onPick: (s: ColorChoice) => void;
+}) {
+  return (
+    <div className="swatches">
+      <button
+        type="button"
+        className={`swatch none ${selected.background == null ? "selected" : ""}`}
+        title="No color"
+        onClick={() => onPick({ text: null, background: null })}
+      >
+        ∅
+      </button>
+      {palette.map((s) => (
+        <button
+          type="button"
+          key={s.background + s.text}
+          className={`swatch ${selected.background === s.background ? "selected" : ""}`}
+          style={{ background: s.background, color: s.text }}
+          title={s.background}
+          onClick={() => onPick({ text: s.text, background: s.background })}
+        >
+          A
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function LabelPill({
+  name,
+  textColor,
+  backgroundColor,
+}: {
+  name: string;
+  textColor?: string | null;
+  backgroundColor?: string | null;
+}) {
+  return (
+    <span
+      className="label-pill"
+      style={{
+        background: backgroundColor ?? "rgba(127,127,127,0.18)",
+        color: textColor ?? "inherit",
+      }}
+    >
+      {name}
+    </span>
+  );
+}
+
 export function Badge({
   children,
   tone = "neutral",
