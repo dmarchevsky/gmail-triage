@@ -509,6 +509,7 @@ export default function Rules() {
         ]}
       />
 
+      <div className="table-scroll wide">
       <table className="table">
         <thead>
           <tr>
@@ -607,6 +608,7 @@ export default function Rules() {
           )}
         </tbody>
       </table>
+      </div>
 
       {editing !== null && (
         <RuleEditor

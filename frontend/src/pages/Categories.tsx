@@ -258,6 +258,7 @@ export default function Categories() {
         ]}
       />
 
+      <div className="table-scroll wide">
       <table className="table">
         <thead>
           <tr>
@@ -315,6 +316,7 @@ export default function Categories() {
           )}
         </tbody>
       </table>
+      </div>
 
       {editing !== null && (
         <CategoryEditor

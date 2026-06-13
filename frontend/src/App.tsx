@@ -5,6 +5,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
 } from "react-router-dom";
 import { ApiError, Settings, StatusResponse, get, post } from "./api";
 import { ToastProvider } from "./toast";
@@ -134,6 +135,11 @@ function SidebarStatus() {
 
 function Shell() {
   const { settings } = useApp();
+  const [navOpen, setNavOpen] = useState(false);
+  const location = useLocation();
+  // Close the mobile nav drawer whenever the route changes.
+  useEffect(() => setNavOpen(false), [location.pathname]);
+
   if (settings && !settings.first_run_complete) {
     return (
       <Routes>
@@ -142,11 +148,24 @@ function Shell() {
       </Routes>
     );
   }
+  const closeNav = () => setNavOpen(false);
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <div className="mobile-bar">
+        <button
+          className="icon-btn hamburger"
+          aria-label="Toggle navigation"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen((o) => !o)}
+        >
+          ☰
+        </button>
+        <span className="mobile-title">MailTriage</span>
+      </div>
+      {navOpen && <div className="nav-backdrop" onClick={closeNav} />}
+      <aside className={`sidebar ${navOpen ? "open" : ""}`}>
         <h1 className="logo">MailTriage</h1>
-        <nav>
+        <nav onClick={closeNav}>
           <NavLink to="/">Dashboard</NavLink>
           <NavLink to="/emails">Emails</NavLink>
           <NavLink to="/categories">Categories</NavLink>

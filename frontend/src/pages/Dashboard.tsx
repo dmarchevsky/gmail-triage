@@ -132,7 +132,8 @@ export default function Dashboard() {
                 LLM confidence is self-reported and uncalibrated — use these
                 empirical counts to tune rule confidence thresholds.
               </p>
-              <table className="table">
+              <div className="table-scroll wide">
+<table className="table">
                 <thead>
                   <tr>
                     <th>Category</th>
@@ -152,11 +153,13 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
+</div>
             </>
           )}
 
           <h3>Recent activity</h3>
-          <table className="table">
+          <div className="table-scroll wide">
+<table className="table">
             <thead>
               <tr>
                 <th>Time</th>
@@ -176,6 +179,7 @@ export default function Dashboard() {
               ))}
             </tbody>
           </table>
+</div>
         </>
       )}
     </div>

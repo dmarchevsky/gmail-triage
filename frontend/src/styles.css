@@ -143,25 +143,110 @@ code {
   min-width: 0;
 }
 
+/* Mobile top bar + nav drawer (hidden on desktop). */
+.mobile-bar {
+  display: none;
+}
+
+.nav-backdrop {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .shell {
     flex-direction: column;
   }
-  .sidebar {
-    width: auto;
-    height: auto;
-    position: static;
-    flex-direction: row;
+  .mobile-bar {
+    display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 0.55rem 1rem;
+    padding-left: max(1rem, env(safe-area-inset-left));
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: var(--bg);
   }
-  .sidebar nav {
-    flex-direction: row;
-    flex-wrap: wrap;
+  .hamburger {
+    font-size: 1.4rem;
+    line-height: 1;
   }
-  .sidebar-foot {
-    margin-top: 0;
-    margin-left: auto;
+  .mobile-title {
+    font-weight: 700;
+  }
+  /* Sidebar becomes a slide-in drawer. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(260px, 82vw);
+    height: 100dvh;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    overflow-y: auto;
+    background: var(--bg);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 55;
+  }
+  .sidebar nav a {
+    padding: 0.7rem 0.6rem;
+  }
+}
+
+/* Generic horizontal-scroll wrapper for wide data tables on small screens. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 720px) {
+  .table-scroll > .table {
+    min-width: 640px;
+  }
+  .table-scroll.wide > .table {
+    min-width: 880px;
+  }
+  /* keep wrapped-table cells to a single line so columns stay aligned */
+  .table-scroll .table th,
+  .table-scroll .table td {
+    white-space: nowrap;
+  }
+  /* iOS zooms when input font < 16px; prevent that on focus */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  /* larger touch targets */
+  button {
+    min-height: 40px;
+  }
+  .icon-btn {
+    min-height: 40px;
+    min-width: 40px;
+  }
+  .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .row-actions button {
+    margin-right: 0;
+  }
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
   }
 }
 

@@ -312,6 +312,7 @@ export default function Digests() {
         ]}
       />
 
+      <div className="table-scroll wide">
       <table className="table">
         <thead>
           <tr>
@@ -398,6 +399,7 @@ export default function Digests() {
           )}
         </tbody>
       </table>
+      </div>
 
       {editing !== null && (
         <DigestEditor

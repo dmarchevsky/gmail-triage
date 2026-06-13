@@ -110,6 +110,7 @@ export default function FeedbackQueue() {
         approval.
       </p>
 
+      <div className="table-scroll wide">
       <table className="table">
         <thead>
           <tr>
@@ -185,6 +186,7 @@ export default function FeedbackQueue() {
           )}
         </tbody>
       </table>
+      </div>
 
       {reviewing && (
         <ProposalReview
