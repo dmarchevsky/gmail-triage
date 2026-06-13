@@ -353,6 +353,7 @@ export default function Emails() {
         ]}
       />
 
+      <div className="emails-scroll">
       <table className="table emails-table">
         <thead>
           <tr>
@@ -421,6 +422,7 @@ export default function Emails() {
           )}
         </tbody>
       </table>
+      </div>
 
       <div className="pager">
         <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
