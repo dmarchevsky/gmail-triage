@@ -456,40 +456,47 @@ tr.clickable {
     text-overflow: ellipsis;
   }
 
+  /* Proportional column widths (sum ~100%) so every column scales with the
+     available width — e.g. when the sidebar is collapsed the extra space is
+     shared, not dumped only into Subject. Percentages are of the table width,
+     and the table keeps a min-width so columns never crush. At the 940px
+     min-width, Date's 14% (~131px) fully fits "Jun 12, 09:35 PM". */
   .emails-table .col-check {
-    width: 34px;
+    width: 3.5%;
   }
 
   .emails-table .col-date {
-    width: 92px;
+    width: 14%;
+    overflow: visible; /* always show the full date/time */
+    text-overflow: clip;
   }
 
   .emails-table .col-sender {
-    width: 160px;
+    width: 17%;
   }
 
-  /* Subject column (no class) = the single auto-width column; never below this. */
+  /* Subject column (no class) = nth-child(4) */
   .emails-table th:nth-child(4),
   .emails-table td:nth-child(4) {
-    min-width: 200px;
+    width: 26%;
   }
 
   .emails-table .col-cat {
-    width: 104px;
+    width: 11%;
   }
 
   .emails-table .col-conf {
-    width: 64px;
+    width: 6%;
     overflow: visible; /* always show the full confidence number */
     text-overflow: clip;
   }
 
   .emails-table .col-status {
-    width: 124px;
+    width: 12%;
   }
 
   .emails-table .col-acts {
-    width: 132px;
+    width: 10.5%;
   }
 }
 
