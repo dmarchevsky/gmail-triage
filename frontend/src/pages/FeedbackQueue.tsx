@@ -49,6 +49,12 @@ function ProposalReview({
           </>
         )}
       </p>
+      {(item.covers_count ?? 0) > 1 && (
+        <p className="note">
+          This consolidated proposal considers <b>{item.covers_count}</b> feedback
+          items for this category — approving incorporates them all at once.
+        </p>
+      )}
       {item.proposal_explanation && (
         <p className="rationale">
           <b>LLM explanation:</b> {item.proposal_explanation}
@@ -132,20 +138,29 @@ export default function FeedbackQueue() {
               <td data-label="Should be">{f.correct_category ?? "none"}</td>
               <td data-label="Note" className="ellipsis">{f.user_note}</td>
               <td data-label="Proposal">
-                <Badge
-                  tone={
-                    f.proposal_status === "pending_review"
-                      ? "warn"
-                      : f.proposal_status === "rejected"
-                        ? "error"
-                        : "neutral"
-                  }
-                >
-                  {f.proposal_status}
-                </Badge>
+                {f.merged_into ? (
+                  <Badge tone="neutral">merged into review</Badge>
+                ) : (
+                  <Badge
+                    tone={
+                      f.proposal_status === "pending_review"
+                        ? "warn"
+                        : f.proposal_status === "rejected"
+                          ? "error"
+                          : "neutral"
+                    }
+                  >
+                    {f.proposal_status}
+                    {f.proposal_status === "pending_review" &&
+                      (f.covers_count ?? 0) > 1 &&
+                      ` · covers ${f.covers_count}`}
+                  </Badge>
+                )}
               </td>
               <td className="row-actions">
-                {f.proposal_status === "pending_review" ? (
+                {f.merged_into ? (
+                  <span className="sub">in pending review</span>
+                ) : f.proposal_status === "pending_review" ? (
                   <button className="primary" onClick={() => setReviewing(f)}>
                     Review
                   </button>

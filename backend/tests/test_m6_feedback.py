@@ -164,3 +164,95 @@ def test_invalid_proposal_output_502(auth_client, misclassified):
     assert resp.status_code == 502
     assert auth_client.get("/api/v1/feedback?status=open").json()[0][
         "proposal_status"] == "none"
+
+
+@pytest.fixture()
+def two_misclassified(auth_client, db_session):
+    """Two emails wrongly classified as MarketNews; correct = Receipts."""
+    market = Category(name="MarketNews", criteria_md="Market commentary.")
+    receipts = Category(name="Receipts", criteria_md="Order confirmations.")
+    db_session.add_all([market, receipts])
+    db_session.flush()
+    e1 = Email(gmail_message_id="g1", sender="shop@a.com", subject="Order #1",
+               snippet="order one", status="classified", classification_id=market.id,
+               confidence=0.6, rationale="r1", received_at=datetime.now(UTC))
+    e2 = Email(gmail_message_id="g2", sender="shop@b.com", subject="Invoice #2",
+               snippet="invoice two", status="classified", classification_id=market.id,
+               confidence=0.6, rationale="r2", received_at=datetime.now(UTC))
+    db_session.add_all([e1, e2])
+    db_session.commit()
+    return {"market": market.id, "receipts": receipts.id, "e1": e1.id, "e2": e2.id}
+
+
+@respx.mock
+def test_multiple_feedback_consolidated_into_one_proposal(auth_client, db_session,
+                                                          two_misclassified):
+    chat = respx.post(CHAT_URL).mock(return_value=proposal_response())
+    fb1 = auth_client.post(f"/api/v1/emails/{two_misclassified['e1']}/feedback", json={
+        "correct_category_id": two_misclassified["receipts"], "user_note": "note one"}).json()
+    fb2 = auth_client.post(f"/api/v1/emails/{two_misclassified['e2']}/feedback", json={
+        "correct_category_id": two_misclassified["receipts"], "user_note": "note two"}).json()
+
+    # Generate once -> a single consolidated proposal covering BOTH feedbacks.
+    rep = auth_client.post(f"/api/v1/feedback/{fb1['id']}/generate-proposal").json()
+    assert rep["proposal_status"] == "pending_review"
+    assert sorted(rep["proposal_feedback_ids"]) == sorted([fb1["id"], fb2["id"]])
+    assert rep["covers_count"] == 2
+    # the most-recent feedback is the representative
+    assert rep["id"] == fb2["id"]
+
+    # the prompt mentions BOTH emails and BOTH notes
+    user = json.loads(chat.calls[0].request.content)["messages"][1]["content"]
+    assert "Order #1" in user and "Invoice #2" in user
+    assert "note one" in user and "note two" in user
+
+    # exactly one pending_review row across the queue; fb1 is merged into fb2
+    listed = auth_client.get("/api/v1/feedback?status=open").json()
+    pending = [f for f in listed if f["proposal_status"] == "pending_review"]
+    assert len(pending) == 1
+    merged = next(f for f in listed if f["id"] == fb1["id"])
+    assert merged["merged_into"] == fb2["id"]
+
+
+@respx.mock
+def test_approve_consolidated_incorporates_all(auth_client, db_session,
+                                               two_misclassified):
+    respx.post(CHAT_URL).mock(return_value=proposal_response())
+    fb1 = auth_client.post(f"/api/v1/emails/{two_misclassified['e1']}/feedback", json={
+        "correct_category_id": two_misclassified["receipts"]}).json()
+    fb2 = auth_client.post(f"/api/v1/emails/{two_misclassified['e2']}/feedback", json={
+        "correct_category_id": two_misclassified["receipts"]}).json()
+    rep = auth_client.post(f"/api/v1/feedback/{fb1['id']}/generate-proposal").json()
+
+    result = auth_client.post(f"/api/v1/feedback/{rep['id']}/approve").json()
+    assert result["criteria_version"] == 2  # bumped once
+
+    # both feedbacks incorporated; history records both ids
+    db_session.expire_all()
+    from app.models import Feedback
+    statuses = {f.id: f.status for f in db_session.query(Feedback).all()}
+    assert statuses[fb1["id"]] == "incorporated"
+    assert statuses[fb2["id"]] == "incorporated"
+    history = auth_client.get(
+        f"/api/v1/categories/{two_misclassified['receipts']}/criteria-history").json()
+    assert sorted(history[0]["feedback_ids"]) == sorted([fb1["id"], fb2["id"]])
+    assert auth_client.get("/api/v1/feedback?status=open").json() == []
+
+
+@respx.mock
+def test_new_feedback_regenerates_to_include_it(auth_client, db_session,
+                                                two_misclassified):
+    respx.post(CHAT_URL).mock(return_value=proposal_response())
+    fb1 = auth_client.post(f"/api/v1/emails/{two_misclassified['e1']}/feedback", json={
+        "correct_category_id": two_misclassified["receipts"]}).json()
+    auth_client.post(f"/api/v1/feedback/{fb1['id']}/generate-proposal")
+    # second feedback arrives, then regenerate (debounce is async; trigger manually)
+    fb2 = auth_client.post(f"/api/v1/emails/{two_misclassified['e2']}/feedback", json={
+        "correct_category_id": two_misclassified["receipts"]}).json()
+    rep = auth_client.post(f"/api/v1/feedback/{fb2['id']}/generate-proposal").json()
+
+    assert sorted(rep["proposal_feedback_ids"]) == sorted([fb1["id"], fb2["id"]])
+    # the old representative (fb1) is no longer pending — superseded
+    listed = auth_client.get("/api/v1/feedback?status=open").json()
+    pending = [f for f in listed if f["proposal_status"] == "pending_review"]
+    assert len(pending) == 1 and pending[0]["id"] == fb2["id"]

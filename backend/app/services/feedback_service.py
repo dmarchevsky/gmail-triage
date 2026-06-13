@@ -8,14 +8,15 @@ automatically — the user approves/edits/rejects in the Feedback queue.
 import asyncio
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.logging_setup import get_logger
 from app.models import (
     Category,
     CategoryCriteriaHistory,
     CriteriaSource,
+    Email,
     Feedback,
     FeedbackStatus,
     ProposalStatus,
@@ -28,7 +29,9 @@ from app.services.gmail import GmailClient
 log = get_logger(__name__)
 
 DEBOUNCE_SECONDS = 60.0
-MAX_PRIOR_FEEDBACK = 5
+# Cap how many misclassified emails go into one consolidated revision prompt
+# (bounds Gmail body fetches + LLM context); the rest get a follow-up proposal.
+MAX_CONSOLIDATED_EMAILS = 10
 
 PROPOSAL_SCHEMA = {
     "type": "object",
@@ -73,77 +76,90 @@ async def _delayed_generation(category_id: int, delay: float) -> None:
 
     session = get_sessionmaker()()
     try:
-        feedbacks = session.scalars(
-            select(Feedback).where(
-                Feedback.status == FeedbackStatus.open.value,
-                Feedback.proposal_status == ProposalStatus.none.value))
-        for feedback in feedbacks:
-            if target_category_id(feedback) == category_id:
-                try:
-                    await generate_proposal(session, feedback)
-                except llm.LLMError as e:
-                    log.warning("proposal_generation_failed",
-                                feedback_id=feedback.id, error=str(e))
+        await generate_proposal_for_category(session, category_id)
+    except llm.LLMError as e:
+        log.warning("proposal_generation_failed", category_id=category_id,
+                    error=str(e))
     except Exception as e:  # noqa: BLE001 — background job must not crash loop
         log.error("proposal_job_failed", category_id=category_id, error=str(e))
     finally:
         session.close()
 
 
-async def generate_proposal(session: Session, feedback: Feedback) -> Feedback:
-    """Build the revision prompt and store the proposal on the feedback row."""
-    category_id = target_category_id(feedback)
-    if category_id is None:
-        return feedback
+def open_feedback_for_category(session: Session, category_id: int) -> list[Feedback]:
+    """All open feedback whose target category is `category_id` (correct
+    category, or the wrongly-assigned one when the correction is 'none'),
+    oldest first."""
+    return list(session.scalars(
+        select(Feedback)
+        .options(joinedload(Feedback.email))
+        .outerjoin(Email, Email.id == Feedback.email_id)
+        .where(Feedback.status == FeedbackStatus.open.value,
+               or_(Feedback.correct_category_id == category_id,
+                   and_(Feedback.correct_category_id.is_(None),
+                        Email.classification_id == category_id)))
+        .order_by(Feedback.created_at)))
+
+
+async def generate_proposal_for_category(session: Session,
+                                         category_id: int) -> Feedback | None:
+    """Build ONE consolidated revision prompt from all open feedback for the
+    category and store the proposal on the most-recent feedback (the
+    representative). Supersedes any prior pending proposal for the category so
+    every feedback is considered together (no overwrite-on-approve)."""
     category = session.get(Category, category_id)
     if category is None:
-        return feedback
-    email = feedback.email
+        return None
+    fb_list = open_feedback_for_category(session, category_id)
+    if not fb_list:
+        return None
+    included = fb_list[-MAX_CONSOLIDATED_EMAILS:]
+    representative = included[-1]
+
     settings = settings_service.get_all_settings(session, redact=False)
+    body_max = int(settings["classify_body_max_chars"])
 
-    body = ""
+    client: GmailClient | None = None
     client_secret = settings.get("gmail_client_secret_json")
-    if email is not None and client_secret and gmail.load_token(session) is not None:
+    if client_secret and gmail.load_token(session) is not None:
         client = GmailClient(session, client_secret)
-        try:
-            body = await fetch_body(session, client, email)
-        except gmail.GmailError:
+    try:
+        blocks = []
+        for i, fb in enumerate(included, 1):
+            email = fb.email
             body = ""
-        finally:
+            if client is not None and email is not None:
+                try:
+                    body = await fetch_body(session, client, email)
+                except gmail.GmailError:
+                    body = ""
+            body = (body or (email.snippet if email else "") or "")[:body_max]
+            original = (email.classification.name
+                        if email is not None and email.classification else "none")
+            corrected = (session.get(Category, fb.correct_category_id).name
+                         if fb.correct_category_id else "none")
+            blocks.append(
+                f"--- Email {i} ---\n"
+                f"From: {email.sender if email else '?'}\n"
+                f"Subject: {email.subject if email else '?'}\n"
+                f"Originally classified as: {original}\n"
+                f"Model rationale: {email.rationale if email else '(none)'}\n"
+                f"User says correct category is: {corrected}\n"
+                f"User note: {fb.user_note or '(none)'}\n"
+                f"Body (truncated):\n{body}")
+    finally:
+        if client is not None:
             await client.aclose()
-    body = (body or (email.snippet if email else "") or "")[
-        : int(settings["classify_body_max_chars"])]
-
-    prior = session.scalars(
-        select(Feedback)
-        .where(Feedback.id != feedback.id,
-               Feedback.correct_category_id == category_id)
-        .order_by(Feedback.created_at.desc()).limit(MAX_PRIOR_FEEDBACK)).all()
-    prior_block = "\n".join(
-        f"- email {p.email.subject!r} from {p.email.sender!r}: "
-        f"note={p.user_note or '(none)'}"
-        for p in prior if p.email is not None) or "(none)"
-
-    original = (email.classification.name
-                if email is not None and email.classification else "none")
-    corrected = (session.get(Category, feedback.correct_category_id).name
-                 if feedback.correct_category_id else "none")
 
     system = llm.load_prompt("criteria_revision_system.txt").format(
         category=category.name)
     user = (
         f"Current criteria for {category.name!r} (version "
         f"{category.criteria_version}):\n{category.criteria_md or '(empty)'}\n\n"
-        f"Misclassified email:\nFrom: {email.sender if email else '?'}\n"
-        f"Subject: {email.subject if email else '?'}\n"
-        f"Date: {email.received_at if email else '?'}\n"
-        f"Body (truncated):\n{body}\n\n"
-        f"The model originally classified it as: {original}\n"
-        f"Model's original rationale: {email.rationale if email else '(none)'}\n"
-        f"The user says the correct category is: {corrected}\n"
-        f"User note: {feedback.user_note or '(none)'}\n\n"
-        f"Recent prior feedback for this category:\n{prior_block}\n\n"
-        "Produce the revised criteria now."
+        f"The model misclassified the following {len(included)} email(s); revise "
+        f"the criteria so all of them classify correctly:\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nProduce the revised criteria now."
     )
 
     result = await llm.chat_json(
@@ -152,13 +168,24 @@ async def generate_proposal(session: Session, feedback: Feedback) -> Feedback:
         settings=settings,
         max_concurrency=int(settings["llm_max_concurrency"]))
 
-    feedback.proposed_criteria_md = str(result["criteria_md"])
-    feedback.proposal_explanation = str(result["explanation"])[:2000]
-    feedback.proposal_status = ProposalStatus.pending_review.value
+    # Supersede any other pending proposal for this category.
+    for fb in fb_list:
+        if fb.id != representative.id \
+                and fb.proposal_status == ProposalStatus.pending_review.value:
+            fb.proposal_status = ProposalStatus.none.value
+            fb.proposed_criteria_md = None
+            fb.proposal_explanation = None
+            fb.proposal_feedback_ids = None
+
+    representative.proposed_criteria_md = str(result["criteria_md"])
+    representative.proposal_explanation = str(result["explanation"])[:2000]
+    representative.proposal_status = ProposalStatus.pending_review.value
+    representative.proposal_feedback_ids = [fb.id for fb in included]
     audit(session, "system", "criteria_proposal_generated",
-          {"feedback_id": feedback.id, "category_id": category.id})
+          {"category_id": category.id, "representative_id": representative.id,
+           "covers": len(included)})
     session.commit()
-    return feedback
+    return representative
 
 
 def approve_proposal(session: Session, feedback: Feedback,
@@ -172,26 +199,33 @@ def approve_proposal(session: Session, feedback: Feedback,
     if not new_criteria:
         raise ValueError("No proposed criteria to approve")
 
+    # Every feedback this consolidated proposal covers is incorporated at once.
+    covered_ids = feedback.proposal_feedback_ids or [feedback.id]
+
     category.criteria_md = new_criteria
     category.criteria_version += 1
     session.add(CategoryCriteriaHistory(
         category_id=category.id, version=category.criteria_version,
         criteria_md=new_criteria, source=CriteriaSource.llm_feedback.value,
-        feedback_ids=[feedback.id]))
+        feedback_ids=covered_ids))
+
+    now = datetime.now(UTC)
+    for fb in session.scalars(select(Feedback).where(Feedback.id.in_(covered_ids))):
+        fb.status = FeedbackStatus.incorporated.value
+        fb.resolved_at = now
     feedback.proposal_status = ProposalStatus.approved.value
-    feedback.status = FeedbackStatus.incorporated.value
-    feedback.resolved_at = datetime.now(UTC)
     audit(session, "user", "criteria_proposal_approved", {
         "feedback_id": feedback.id, "category_id": category.id,
         "new_version": category.criteria_version,
-        "edited": edited_criteria_md is not None})
+        "covered": covered_ids, "edited": edited_criteria_md is not None})
     session.commit()
     return category
 
 
 def reject_proposal(session: Session, feedback: Feedback) -> None:
     feedback.proposal_status = ProposalStatus.rejected.value
-    # Feedback stays open/resolvable manually (criteria untouched).
+    feedback.proposal_feedback_ids = None
+    # Covered feedback stays open/resolvable manually (criteria untouched).
     audit(session, "user", "criteria_proposal_rejected",
           {"feedback_id": feedback.id})
     session.commit()

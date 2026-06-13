@@ -19,7 +19,8 @@ class FeedbackIn(BaseModel):
     user_note: str | None = None
 
 
-def serialize(f: Feedback, session: Session) -> dict:
+def serialize(f: Feedback, session: Session,
+              merged_into: int | None = None, covers_count: int | None = None) -> dict:
     email = f.email
     original = email.classification.name if email and email.classification else None
     correct = session.get(Category, f.correct_category_id) \
@@ -37,6 +38,10 @@ def serialize(f: Feedback, session: Session) -> dict:
         "proposed_criteria_md": f.proposed_criteria_md,
         "proposal_explanation": f.proposal_explanation,
         "proposal_status": f.proposal_status,
+        "proposal_feedback_ids": f.proposal_feedback_ids,
+        # consolidated-proposal hints for the UI:
+        "merged_into": merged_into,          # id of the representative covering this row
+        "covers_count": covers_count,        # how many feedback items this proposal covers
         "created_at": f.created_at.isoformat() if f.created_at else None,
     }
 
@@ -73,8 +78,21 @@ def list_feedback(status: str | None = None,
         if status not in [s.value for s in FeedbackStatus]:
             raise HTTPException(status_code=400, detail="Invalid status")
         query = query.where(Feedback.status == status)
-    rows = session.scalars(query.order_by(Feedback.created_at.desc()))
-    return [serialize(f, session) for f in rows]
+    rows = list(session.scalars(query.order_by(Feedback.created_at.desc())))
+
+    # Map each covered feedback id -> the representative that covers it, so the
+    # UI can show one consolidated proposal and mark the rest as merged.
+    covered_by: dict[int, int] = {}
+    covers_count: dict[int, int] = {}
+    for f in rows:
+        if f.proposal_status == ProposalStatus.pending_review.value \
+                and f.proposal_feedback_ids:
+            covers_count[f.id] = len(f.proposal_feedback_ids)
+            for cid in f.proposal_feedback_ids:
+                if cid != f.id:
+                    covered_by[cid] = f.id
+    return [serialize(f, session, merged_into=covered_by.get(f.id),
+                      covers_count=covers_count.get(f.id)) for f in rows]
 
 
 def _get_feedback(session: Session, feedback_id: int) -> Feedback:
@@ -88,13 +106,21 @@ def _get_feedback(session: Session, feedback_id: int) -> Feedback:
 @router.post("/feedback/{feedback_id}/generate-proposal")
 async def generate_proposal_now(feedback_id: int,
                                 session: Session = Depends(get_session)) -> dict:
-    """Manual/immediate proposal generation (the background job is debounced)."""
+    """Manual/immediate consolidated proposal generation for this feedback's
+    target category (the background job is debounced)."""
     feedback = _get_feedback(session, feedback_id)
+    category_id = feedback_service.target_category_id(feedback)
+    if category_id is None:
+        raise HTTPException(status_code=400, detail="Feedback has no target category")
     try:
-        await feedback_service.generate_proposal(session, feedback)
+        representative = await feedback_service.generate_proposal_for_category(
+            session, category_id)
     except LLMError as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}") from e
-    return serialize(feedback, session)
+    session.expire_all()
+    rep = representative or _get_feedback(session, feedback_id)
+    covers = len(rep.proposal_feedback_ids) if rep.proposal_feedback_ids else None
+    return serialize(rep, session, covers_count=covers)
 
 
 class ApproveBody(BaseModel):

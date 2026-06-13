@@ -226,6 +226,9 @@ class Feedback(Base):
     proposed_criteria_md: Mapped[str | None] = mapped_column(Text)
     proposal_explanation: Mapped[str | None] = mapped_column(Text)
     proposal_status: Mapped[str] = mapped_column(String(16), default=ProposalStatus.none.value)
+    # On the representative row of a consolidated proposal: the feedback ids
+    # (incl. itself) the proposal covers, so all are considered + incorporated.
+    proposal_feedback_ids: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 

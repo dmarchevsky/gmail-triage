@@ -220,5 +220,8 @@ export interface FeedbackItem {
   proposed_criteria_md: string | null;
   proposal_explanation: string | null;
   proposal_status: string;
+  proposal_feedback_ids: number[] | null;
+  merged_into: number | null;
+  covers_count: number | null;
   created_at: string | null;
 }
