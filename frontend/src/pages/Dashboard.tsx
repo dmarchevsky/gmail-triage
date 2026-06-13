@@ -133,7 +133,7 @@ export default function Dashboard() {
                 empirical counts to tune rule confidence thresholds.
               </p>
               <div className="table-scroll wide">
-<table className="table">
+<table className="table precision-table">
                 <thead>
                   <tr>
                     <th>Category</th>
@@ -159,7 +159,7 @@ export default function Dashboard() {
 
           <h3>Recent activity</h3>
           <div className="table-scroll wide">
-<table className="table">
+<table className="table activity-table">
             <thead>
               <tr>
                 <th>Time</th>

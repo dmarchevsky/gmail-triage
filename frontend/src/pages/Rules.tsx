@@ -510,7 +510,7 @@ export default function Rules() {
       />
 
       <div className="table-scroll wide">
-      <table className="table">
+      <table className="table rules-table">
         <thead>
           <tr>
             <th>

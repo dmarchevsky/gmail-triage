@@ -259,7 +259,7 @@ export default function Categories() {
       />
 
       <div className="table-scroll wide">
-      <table className="table">
+      <table className="table categories-table">
         <thead>
           <tr>
             <th>

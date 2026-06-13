@@ -111,7 +111,7 @@ export default function FeedbackQueue() {
       </p>
 
       <div className="table-scroll wide">
-      <table className="table">
+      <table className="table feedback-table">
         <thead>
           <tr>
             <th>When</th>

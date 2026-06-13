@@ -313,7 +313,7 @@ export default function Digests() {
       />
 
       <div className="table-scroll wide">
-      <table className="table">
+      <table className="table digests-table">
         <thead>
           <tr>
             <th>
