@@ -178,8 +178,16 @@ export interface Settings {
   gmail_client_secret_json_configured: boolean;
   ui_password_hash_configured: boolean;
   ignore_senders: string[];
+  poll_scope_labels: string[];
   poller_paused: boolean;
   first_run_complete: boolean;
+}
+
+export interface GmailLabel {
+  id: string;
+  name: string;
+  display_name: string;
+  type: string;
 }
 
 export interface Digest {

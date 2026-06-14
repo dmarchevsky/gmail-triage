@@ -317,3 +317,81 @@ def test_incremental_sync_skips_missing_message(auth_client, db_session, connect
     from app.models import GmailAuth
     db_session.expire_all()
     assert db_session.query(GmailAuth).one().history_id == "200"  # advanced past the gap
+
+
+@respx.mock
+def test_baseline_ingests_category_tab_without_inbox(auth_client, db_session, connected):
+    """A Promotions email that skipped the inbox (CATEGORY_PROMOTIONS, no INBOX)
+    is ingested under the default scope; an archived Primary one is not."""
+    promo = gmail_message("promo1", labels=["CATEGORY_PROMOTIONS"])
+    personal = gmail_message("pers1", labels=["CATEGORY_PERSONAL"])  # archived Primary
+    respx.get(f"{gmail.GMAIL_API}/messages").respond(200, json={
+        "messages": [{"id": "promo1"}, {"id": "pers1"}]})
+    mock_metadata(promo)
+    mock_metadata(personal)
+    respx.get(f"{gmail.GMAIL_API}/profile").respond(200, json={
+        "emailAddress": "me@gmail.test", "historyId": "2000"})
+
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json() == {"mode": "baseline", "new_emails": 1}
+    from app.models import Email
+    assert [e.gmail_message_id for e in db_session.query(Email)] == ["promo1"]
+
+
+@respx.mock
+def test_incremental_ingests_category_tab(auth_client, db_session, connected):
+    connected.history_id = "100"
+    db_session.commit()
+    promo = gmail_message("promo2", labels=["CATEGORY_UPDATES"])
+    respx.get(f"{gmail.GMAIL_API}/history").respond(200, json={
+        "historyId": "200",
+        "history": [{"messagesAdded": [{"message": {"id": "promo2"}}]}]})
+    mock_metadata(promo)
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json() == {"mode": "incremental", "new_emails": 1}
+
+
+@respx.mock
+def test_scope_setting_restricts_to_inbox(auth_client, db_session, connected):
+    from app.services import settings_service
+    settings_service.set_setting(db_session, "poll_scope_labels", ["INBOX"])
+    db_session.commit()
+    promo = gmail_message("promo3", labels=["CATEGORY_PROMOTIONS"])
+    respx.get(f"{gmail.GMAIL_API}/messages").respond(200, json={
+        "messages": [{"id": "promo3"}]})
+    mock_metadata(promo)
+    respx.get(f"{gmail.GMAIL_API}/profile").respond(200, json={
+        "emailAddress": "me@gmail.test", "historyId": "2000"})
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json()["new_emails"] == 0  # promotions out of scope now
+
+
+@respx.mock
+def test_trash_and_spam_never_ingested(auth_client, db_session, connected):
+    trash = gmail_message("t1", labels=["INBOX", "TRASH"])
+    spam = gmail_message("s1", labels=["CATEGORY_PROMOTIONS", "SPAM"])
+    respx.get(f"{gmail.GMAIL_API}/messages").respond(200, json={
+        "messages": [{"id": "t1"}, {"id": "s1"}]})
+    mock_metadata(trash)
+    mock_metadata(spam)
+    respx.get(f"{gmail.GMAIL_API}/profile").respond(200, json={
+        "emailAddress": "me@gmail.test", "historyId": "2000"})
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json()["new_emails"] == 0
+
+
+@respx.mock
+def test_gmail_labels_endpoint(auth_client, connected):
+    respx.get(f"{gmail.GMAIL_API}/labels").respond(200, json={"labels": [
+        {"id": "INBOX", "type": "system", "name": "INBOX"},
+        {"id": "CATEGORY_PROMOTIONS", "type": "system", "name": "CATEGORY_PROMOTIONS"},
+        {"id": "SENT", "type": "system", "name": "SENT"},
+        {"id": "Label_7", "type": "user", "name": "Work"},
+    ]})
+    out = auth_client.get("/api/v1/gmail/labels").json()
+    ids = [x["id"] for x in out]
+    assert "SENT" not in ids  # excluded
+    assert ids[0] == "INBOX"  # inbox first
+    by_id = {x["id"]: x for x in out}
+    assert by_id["CATEGORY_PROMOTIONS"]["display_name"] == "Promotions"
+    assert by_id["Label_7"]["display_name"] == "Work" and by_id["Label_7"]["type"] == "user"

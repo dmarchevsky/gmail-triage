@@ -33,6 +33,10 @@ DEFAULTS: dict[str, Any] = {
     "telegram_default_chat_id": "",
     "gmail_client_secret_json": "",
     "ignore_senders": [],  # list of glob/regex patterns skipped before LLM
+    # Gmail label IDs that define the poll scope. Default = inbox + the four
+    # category tabs (so Promotions/Updates that skip the inbox are triaged too).
+    "poll_scope_labels": ["INBOX", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
+                          "CATEGORY_UPDATES", "CATEGORY_FORUMS"],
     "poller_paused": False,
     "first_run_complete": False,
 }

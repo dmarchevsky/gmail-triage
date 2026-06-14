@@ -6,7 +6,9 @@ Runs as an asyncio task started from the app lifespan. Each cycle:
 - later runs: users.history.list from the stored historyId; on 404
   (history expired) fall back to messages.list after the newest stored email;
 - fetch metadata for new message ids, persist idempotently (unique
-  gmail_message_id), only INBOX messages not sent by the user.
+  gmail_message_id); ingest messages whose Gmail labels fall in the
+  configured poll scope (poll_scope_labels: inbox + chosen category tabs),
+  excluding Sent/Drafts/Spam/Trash/Chats and the user's own mail.
 """
 
 import asyncio
@@ -45,6 +47,10 @@ def set_classify_hook(hook) -> None:
     _classify_hook = hook
 
 
+# Never ingest these regardless of scope (Sent/Drafts/Spam/Trash/Chats).
+EXCLUDED_LABELS = {"SENT", "DRAFT", "TRASH", "SPAM", "CHAT"}
+
+
 def _own_addresses(session: Session) -> set[str]:
     loaded = gmail.load_token(session)
     if loaded and loaded[0].email_address:
@@ -52,8 +58,13 @@ def _own_addresses(session: Session) -> set[str]:
     return set()
 
 
+def _scope_labels(session: Session) -> set[str]:
+    """Gmail label IDs that define the poll scope (configurable in Settings)."""
+    return set(settings_service.get_setting(session, "poll_scope_labels") or [])
+
+
 async def _persist_message(session: Session, client: GmailClient, message_id: str,
-                           own_addresses: set[str]) -> bool:
+                           own_addresses: set[str], scope: set[str]) -> bool:
     """Fetch + store one message. Returns True if a new row was created."""
     existing = session.scalar(select(Email).where(Email.gmail_message_id == message_id))
     if existing is not None:
@@ -67,8 +78,8 @@ async def _persist_message(session: Session, client: GmailClient, message_id: st
         return False
     meta = gmail.parse_message_meta(msg)
     labels = set(meta.pop("label_ids"))
-    if "INBOX" not in labels or "SENT" in labels:
-        return False
+    if labels & EXCLUDED_LABELS or not (labels & scope):
+        return False  # out of the configured scope (or Sent/Draft/Spam/Trash/Chat)
     sender_addr = meta["sender"].lower()
     if any(own in sender_addr for own in own_addresses):
         return False
@@ -84,14 +95,15 @@ async def _baseline_sync(session: Session, client: GmailClient) -> int:
     lookback_hours = int(settings_service.get_setting(session, "initial_lookback_hours"))
     new_count = 0
     own = _own_addresses(session)
+    scope = _scope_labels(session)
     if lookback_hours > 0:
         after = datetime.now(UTC) - timedelta(hours=lookback_hours)
-        q = f"after:{int(after.timestamp())}"
+        q = f"after:{int(after.timestamp())} -in:sent -in:chats"
         page_token = None
         while True:
             page = await client.list_messages(q=q, page_token=page_token)
             for ref in page.get("messages", []):
-                if await _persist_message(session, client, ref["id"], own):
+                if await _persist_message(session, client, ref["id"], own, scope):
                     new_count += 1
             page_token = page.get("nextPageToken")
             if not page_token:
@@ -106,6 +118,7 @@ async def _incremental_sync(session: Session, client: GmailClient,
                             start_history_id: str) -> int:
     new_count = 0
     own = _own_addresses(session)
+    scope = _scope_labels(session)
     page_token = None
     latest_history_id = start_history_id
     while True:
@@ -113,7 +126,8 @@ async def _incremental_sync(session: Session, client: GmailClient,
         latest_history_id = str(page.get("historyId", latest_history_id))
         for record in page.get("history", []):
             for added in record.get("messagesAdded", []):
-                if await _persist_message(session, client, added["message"]["id"], own):
+                if await _persist_message(session, client, added["message"]["id"],
+                                          own, scope):
                     new_count += 1
         page_token = page.get("nextPageToken")
         if not page_token:
@@ -130,11 +144,13 @@ async def _fallback_sync(session: Session, client: GmailClient) -> int:
     after_ts = int((newest or (datetime.now(UTC) - timedelta(days=1))).timestamp()) - 3600
     new_count = 0
     own = _own_addresses(session)
+    scope = _scope_labels(session)
     page_token = None
     while True:
-        page = await client.list_messages(q=f"after:{after_ts}", page_token=page_token)
+        page = await client.list_messages(q=f"after:{after_ts} -in:sent -in:chats",
+                                          page_token=page_token)
         for ref in page.get("messages", []):
-            if await _persist_message(session, client, ref["id"], own):
+            if await _persist_message(session, client, ref["id"], own, scope):
                 new_count += 1
         page_token = page.get("nextPageToken")
         if not page_token:

@@ -77,6 +77,45 @@ async def oauth_callback(request: Request, session: Session = Depends(get_sessio
     return RedirectResponse("/?gmail_connected=1")
 
 
+_SYSTEM_LABEL_NAMES = {
+    "INBOX": "Inbox",
+    "CATEGORY_PERSONAL": "Primary",
+    "CATEGORY_PROMOTIONS": "Promotions",
+    "CATEGORY_SOCIAL": "Social",
+    "CATEGORY_UPDATES": "Updates",
+    "CATEGORY_FORUMS": "Forums",
+}
+
+
+@router.get("/labels")
+async def list_gmail_labels(session: Session = Depends(get_session)) -> list[dict]:
+    """Scope-relevant Gmail labels (inbox + category tabs + user labels) for
+    the Mailbox-scope picker in Settings."""
+    client_secret = settings_service.get_setting(session, "gmail_client_secret_json")
+    if not client_secret or gmail.load_token(session) is None:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+    client = gmail.GmailClient(session, client_secret)
+    try:
+        labels = await client.list_labels()
+    finally:
+        await client.aclose()
+    out = []
+    for lb in labels:
+        lid = lb.get("id", "")
+        if lid == "INBOX" or lid.startswith("CATEGORY_") or lb.get("type") == "user":
+            out.append({
+                "id": lid,
+                "name": lb.get("name", lid),
+                "display_name": _SYSTEM_LABEL_NAMES.get(lid, lb.get("name", lid)),
+                "type": lb.get("type", "system"),
+            })
+    # Sort: inbox first, then categories, then user labels alphabetically.
+    order = {"INBOX": 0}
+    order.update({k: 1 for k in _SYSTEM_LABEL_NAMES if k != "INBOX"})
+    out.sort(key=lambda x: (order.get(x["id"], 2), x["display_name"].lower()))
+    return out
+
+
 @router.get("/auth")
 def get_auth_info(session: Session = Depends(get_session)) -> dict:
     row = session.scalar(select(GmailAuth).limit(1))

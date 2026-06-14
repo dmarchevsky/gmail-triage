@@ -1,8 +1,76 @@
 import { useEffect, useState } from "react";
-import { Settings, del, get, post, put } from "../api";
+import { GmailLabel, Settings, del, get, post, put } from "../api";
 import { AsyncButton, Badge, ConfirmDialog } from "../components";
 import { useToast } from "../toast";
 import { useApp } from "../App";
+
+function MailboxScope({
+  settings,
+  onSave,
+}: {
+  settings: Settings;
+  onSave: (values: Record<string, unknown>) => Promise<void>;
+}) {
+  const toast = useToast();
+  const [labels, setLabels] = useState<GmailLabel[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>(settings.poll_scope_labels);
+
+  useEffect(() => {
+    get<GmailLabel[]>("/gmail/labels")
+      .then(setLabels)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  const toggle = (id: string) =>
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+
+  return (
+    <div className="settings-section">
+      <h3>Mailbox scope</h3>
+      <p className="sub">
+        Which Gmail categories/labels MailTriage polls and triages. Promotions,
+        Updates, etc. often skip the inbox, so include them here to triage them.
+        Sent, Drafts, Spam and Trash are always excluded. Changes affect future
+        polls; to pull in past mail, raise the initial lookback and re-poll.
+      </p>
+      {error && (
+        <p className="sub">
+          Connect Gmail to choose categories. ({error})
+        </p>
+      )}
+      {labels && (
+        <>
+          <div className="head-actions" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+            {labels.map((lb) => (
+              <label key={lb.id} className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(lb.id)}
+                  onChange={() => toggle(lb.id)}
+                />
+                {lb.display_name}
+                {lb.type === "user" && <span className="sub"> (label)</span>}
+              </label>
+            ))}
+          </div>
+          <button
+            className="primary"
+            onClick={async () => {
+              if (selected.length === 0)
+                toast.error("Nothing selected — MailTriage will ingest no mail");
+              await onSave({ poll_scope_labels: selected });
+            }}
+          >
+            Save mailbox scope
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function GmailConnect({ onChange }: { onChange?: () => void }) {
   const { status, refresh } = useApp();
@@ -126,6 +194,8 @@ export default function SettingsPage() {
         <h2>Settings</h2>
       </header>
       <GmailConnect onChange={load} />
+
+      <MailboxScope settings={settings} onSave={saveValues} />
 
       <div className="settings-section">
         <h3>Polling & processing</h3>

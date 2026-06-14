@@ -247,7 +247,6 @@ class GmailClient:
         params = {
             "startHistoryId": start_history_id,
             "historyTypes": "messageAdded",
-            "labelId": "INBOX",
         }
         if page_token:
             params["pageToken"] = page_token
@@ -255,7 +254,7 @@ class GmailClient:
 
     async def list_messages(self, q: str, page_token: str | None = None,
                             max_results: int = 100) -> dict:
-        params: dict = {"q": q, "maxResults": max_results, "labelIds": "INBOX"}
+        params: dict = {"q": q, "maxResults": max_results}
         if page_token:
             params["pageToken"] = page_token
         return await self._request("GET", "/messages", params=params)
