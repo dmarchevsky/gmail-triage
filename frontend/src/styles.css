@@ -567,6 +567,69 @@ tr.clickable {
   min-width: 110px;
 }
 
+/* Select-all banner — sits between BulkActionBar and the emails table.
+   On desktop it is invisible unless there is something to show (offer or
+   confirmation); on mobile it always contains the "select this page"
+   checkbox because the table <thead> is hidden there. */
+.select-banner {
+  display: none; /* desktop default: hidden until needed */
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  padding: 0.15rem 0;
+}
+
+.select-banner.has-offer {
+  display: flex;
+}
+
+.select-page-mobile {
+  display: none; /* shown on mobile only */
+}
+
+.select-all-offer {
+  color: var(--muted);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  text-decoration: underline;
+  min-height: unset;
+}
+
+.link-btn:hover {
+  opacity: 0.8;
+}
+
+@media (max-width: 720px) {
+  .select-banner {
+    display: flex; /* always visible on mobile */
+    padding: 0.3rem 0;
+  }
+
+  .select-page-mobile {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .select-page-mobile input {
+    width: auto;
+    min-width: unset;
+  }
+}
+
 .pager {
   display: flex;
   gap: 0.75rem;

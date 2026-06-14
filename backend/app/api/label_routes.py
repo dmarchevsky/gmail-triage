@@ -24,6 +24,7 @@ class LabelIn(BaseModel):
 def serialize(lb: Label) -> dict:
     return {
         "id": lb.id, "name": lb.name, "gmail_label_id": lb.gmail_label_id,
+        "is_system": lb.is_system,
         "text_color": lb.text_color, "background_color": lb.background_color,
     }
 
@@ -94,6 +95,8 @@ async def update_label(label_id: int, body: LabelIn,
     label = session.get(Label, label_id)
     if label is None:
         raise HTTPException(status_code=404, detail="Label not found")
+    if label.is_system:
+        raise HTTPException(status_code=403, detail="System labels cannot be modified")
     clash = session.scalar(select(Label).where(Label.name == body.name,
                                                Label.id != label_id))
     if clash:
@@ -120,6 +123,8 @@ async def delete_label(label_id: int, force: bool = False,
     label = session.get(Label, label_id)
     if label is None:
         raise HTTPException(status_code=404, detail="Label not found")
+    if label.is_system:
+        raise HTTPException(status_code=403, detail="System labels cannot be deleted")
     used_by = _rules_using_label(session, label_id)
     if used_by and not force:
         raise HTTPException(status_code=409,

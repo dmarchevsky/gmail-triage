@@ -155,11 +155,14 @@ async def apply_rules_to_email(session: Session, client: GmailClient | None,
     now = datetime.now(UTC)
     any_executed = bool(live) and live_ok
     email.dry_run = not any_executed  # True only if nothing ran live
-    for _rule, action in planned:
+    for (_rule, action), label in zip(planned, labels, strict=True):
         is_live = not _rule.dry_run
+        params = dict(action)
+        if label is not None:
+            params["label_name"] = label.name
         session.add(EmailAction(
             email_id=email.id, rule_id=_rule.id,
-            action_type=action["type"], action_params=action,
+            action_type=action["type"], action_params=params,
             executed=is_live and live_ok, dry_run=_rule.dry_run,
             executed_at=now if (is_live and live_ok) else None,
             error=exec_error if is_live else None))

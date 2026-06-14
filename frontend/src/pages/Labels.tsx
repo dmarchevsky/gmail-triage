@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ColorSwatch, Label, del, get, post, put } from "../api";
-import { ConfirmDialog, LabelPill, Modal, SwatchPicker } from "../components";
+import { Badge, ConfirmDialog, LabelPill, Modal, SwatchPicker } from "../components";
 import { useToast } from "../toast";
 
 function LabelEditor({
@@ -109,15 +109,26 @@ export default function Labels() {
                     textColor={lb.text_color}
                     backgroundColor={lb.background_color}
                   />
+                  {lb.is_system && (
+                    <> <Badge tone="neutral">system</Badge></>
+                  )}
                 </td>
                 <td data-label="Gmail">
-                  {lb.gmail_label_id ? "synced" : <span className="sub">not yet created</span>}
+                  {lb.is_system
+                    ? "built-in"
+                    : lb.gmail_label_id
+                    ? "synced"
+                    : <span className="sub">not yet created</span>}
                 </td>
                 <td className="row-actions">
-                  <button onClick={() => setEditing(lb)}>Edit</button>
-                  <button className="danger" onClick={() => setDeleting(lb)}>
-                    Delete
-                  </button>
+                  {!lb.is_system && (
+                    <>
+                      <button onClick={() => setEditing(lb)}>Edit</button>
+                      <button className="danger" onClick={() => setDeleting(lb)}>
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}

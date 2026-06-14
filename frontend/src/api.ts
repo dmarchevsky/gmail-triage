@@ -79,6 +79,7 @@ export interface Label {
   id: number;
   name: string;
   gmail_label_id: string | null;
+  is_system?: boolean;
   text_color: string | null;
   background_color: string | null;
 }

@@ -77,6 +77,7 @@ class Label(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
     gmail_label_id: Mapped[str | None] = mapped_column(String(64))
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     text_color: Mapped[str | None] = mapped_column(String(16))
     background_color: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

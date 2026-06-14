@@ -172,6 +172,7 @@ export default function Emails() {
     q: "",
   });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [allMatchingSelected, setAllMatchingSelected] = useState(false);
   const [bulkConfirm, setBulkConfirm] = useState<"reclassify" | null>(null);
 
   const load = useCallback(async () => {
@@ -188,6 +189,7 @@ export default function Emails() {
   useEffect(() => {
     load();
     setSelectedIds(new Set());
+    setAllMatchingSelected(false);
   }, [load]);
   useEffect(() => {
     get<Category[]>("/categories").then(setCategories);
@@ -217,11 +219,14 @@ export default function Emails() {
   const pageIds = list?.items.map((e) => e.id) ?? [];
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
   const someChecked = pageIds.some((id) => selectedIds.has(id));
+  const hasMore = list != null && list.total > pageIds.length;
 
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const mobileSelectRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (selectAllRef.current)
-      selectAllRef.current.indeterminate = someChecked && !allChecked;
+    const val = someChecked && !allChecked;
+    if (selectAllRef.current) selectAllRef.current.indeterminate = val;
+    if (mobileSelectRef.current) mobileSelectRef.current.indeterminate = val;
   }, [someChecked, allChecked]);
 
   const toggleSelect = (id: number) =>
@@ -232,8 +237,24 @@ export default function Emails() {
       return next;
     });
 
-  const selectAll = () => setSelectedIds(new Set(pageIds));
-  const clearSelection = () => setSelectedIds(new Set());
+  const selectAll = () => { setSelectedIds(new Set(pageIds)); setAllMatchingSelected(false); };
+  const clearSelection = () => { setSelectedIds(new Set()); setAllMatchingSelected(false); };
+
+  const selectAllMatching = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (filters.category_id) params.set("category_id", filters.category_id);
+      if (filters.status) params.set("status", filters.status);
+      if (filters.confidence_min) params.set("confidence_min", filters.confidence_min);
+      if (filters.confidence_max) params.set("confidence_max", filters.confidence_max);
+      if (filters.q) params.set("q", filters.q);
+      const result = await get<{ ids: number[] }>(`/emails/ids?${params.toString()}`);
+      setSelectedIds(new Set(result.ids));
+      setAllMatchingSelected(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const doBulkReclassify = async () => {
     const ids = Array.from(selectedIds);
@@ -353,6 +374,32 @@ export default function Emails() {
         ]}
       />
 
+      <div className={`select-banner${(allChecked && hasMore) || allMatchingSelected ? " has-offer" : ""}`}>
+        {/* Mobile-only: select-page checkbox (thead is hidden on mobile) */}
+        <label className="select-page-mobile">
+          <input
+            type="checkbox"
+            ref={mobileSelectRef}
+            checked={allChecked}
+            onChange={() => (allChecked ? clearSelection() : selectAll())}
+          />
+          Select page
+        </label>
+        {allChecked && hasMore && !allMatchingSelected && (
+          <span className="select-all-offer">
+            All {pageIds.length} on this page selected.{" "}
+            <button className="link-btn" onClick={selectAllMatching}>
+              Select all {list!.total} emails
+            </button>
+          </span>
+        )}
+        {allMatchingSelected && (
+          <span className="select-all-offer">
+            All {selectedIds.size} emails selected.
+          </span>
+        )}
+      </div>
+
       <div className="emails-scroll">
       <table className="table emails-table">
         <thead>
@@ -393,7 +440,11 @@ export default function Emails() {
                 <Badge tone={statusTone(e.status)}>{e.status}</Badge>{" "}
                 {e.dry_run && e.actions.length > 0 && <Badge tone="dry">dry</Badge>}
               </td>
-              <td data-label="Actions">{e.actions.map((a) => actionLabel(a.action_type)).join(", ") || "—"}</td>
+              <td data-label="Actions">{e.actions.map((a) => {
+                const base = actionLabel(a.action_type);
+                const lname = a.action_params?.label_name as string | undefined;
+                return lname ? `${base} → ${lname}` : base;
+              }).join(", ") || "—"}</td>
             </tr>
           ))}
           {list && list.items.length === 0 && (

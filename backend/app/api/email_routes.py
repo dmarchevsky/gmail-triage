@@ -92,6 +92,43 @@ def list_emails(
             "items": [serialize_email(e) for e in rows]}
 
 
+@router.get("/emails/ids")
+def list_email_ids(
+    session: Session = Depends(get_session),
+    category_id: int | None = None,
+    status: str | None = None,
+    confidence_min: float | None = Query(default=None, ge=0, le=1),
+    confidence_max: float | None = Query(default=None, ge=0, le=1),
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    q: str | None = None,
+) -> dict:
+    """All IDs matching the current filters (no pagination). Used for
+    select-all-across-pages. Capped at 5 000."""
+    query = select(Email.id)
+    if category_id is not None:
+        if category_id == 0:
+            query = query.where(Email.classification_id.is_(None))
+        else:
+            query = query.where(Email.classification_id == category_id)
+    if status:
+        query = query.where(Email.status == status)
+    if confidence_min is not None:
+        query = query.where(Email.confidence >= confidence_min)
+    if confidence_max is not None:
+        query = query.where(Email.confidence <= confidence_max)
+    if date_from:
+        query = query.where(Email.received_at >= date_from)
+    if date_to:
+        query = query.where(Email.received_at <= date_to)
+    if q:
+        like = f"%{q}%"
+        query = query.where(Email.subject.ilike(like) | Email.sender.ilike(like))
+    ids = list(session.scalars(
+        query.order_by(Email.received_at.desc()).limit(5000)))
+    return {"ids": ids}
+
+
 @router.get("/emails/{email_id}")
 def get_email(email_id: int, session: Session = Depends(get_session)) -> dict:
     email = session.get(Email, email_id, options=[joinedload(Email.classification),
@@ -122,10 +159,7 @@ async def reclassify_email(email_id: int,
     if not client_secret:
         raise HTTPException(status_code=409, detail="Gmail is not connected")
 
-    session.execute(delete(EmailAction).where(
-        EmailAction.email_id == email_id,
-        EmailAction.dry_run.is_(True),
-        EmailAction.executed.is_(False)))
+    session.execute(delete(EmailAction).where(EmailAction.email_id == email_id))
     email.classification_id = None
     email.confidence = None
     email.rationale = None
@@ -179,10 +213,7 @@ async def reclassify_bulk(body: BulkEmailIds,
     if not client_secret:
         raise HTTPException(status_code=409, detail="Gmail is not connected")
 
-    session.execute(delete(EmailAction).where(
-        EmailAction.email_id.in_(body.email_ids),
-        EmailAction.dry_run.is_(True),
-        EmailAction.executed.is_(False)))
+    session.execute(delete(EmailAction).where(EmailAction.email_id.in_(body.email_ids)))
     emails = list(session.scalars(select(Email).where(Email.id.in_(body.email_ids))))
     for email in emails:
         email.classification_id = None
@@ -232,9 +263,7 @@ async def rerun_rules_bulk(body: BulkEmailIds,
         return {"processed": 0, "actioned": 0, "errors": 0}
 
     session.execute(delete(EmailAction).where(
-        EmailAction.email_id.in_([e.id for e in eligible]),
-        EmailAction.dry_run.is_(True),
-        EmailAction.executed.is_(False)))
+        EmailAction.email_id.in_([e.id for e in eligible])))
     for email in eligible:
         email.status = EmailStatus.classified.value
     session.commit()

@@ -3,6 +3,7 @@ import {
   Category,
   ColorSwatch,
   CriteriaVersion,
+  Label,
   del,
   delWithBody,
   get,
@@ -46,9 +47,29 @@ function CategoryEditor({
   const [quickColor, setQuickColor] = useState<ColorChoice>({ text: null, background: null });
   const [quickConf, setQuickConf] = useState(0.8);
 
+  // Quick rule creation (both new and existing categories).
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [quickRule, setQuickRule] = useState(false);
+  const [quickRuleName, setQuickRuleName] = useState("");
+  const [quickRuleConf, setQuickRuleConf] = useState(0.8);
+  const [quickRuleAction, setQuickRuleAction] = useState<"archive" | "mark_read" | "add_label">("archive");
+  const [quickRuleLabelId, setQuickRuleLabelId] = useState<number | null>(null);
+
+  // Quick digest creation (both new and existing categories).
+  const [quickDigest, setQuickDigest] = useState(false);
+  const [quickDigestName, setQuickDigestName] = useState("");
+  const [quickDigestTimes, setQuickDigestTimes] = useState("07:00");
+
   useEffect(() => {
     if (!category) get<ColorSwatch[]>("/labels/palette").then(setPalette);
+    get<Label[]>("/labels").then(setLabels);
   }, [category]);
+
+  // Auto-fill quick names from the category name when they're still empty.
+  useEffect(() => {
+    if (quickRule && !quickRuleName) setQuickRuleName(form.name || "");
+    if (quickDigest && !quickDigestName) setQuickDigestName(form.name || "");
+  }, [quickRule, quickDigest, form.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     try {
@@ -65,6 +86,29 @@ function CategoryEditor({
           text_color: quickColor.text,
           background_color: quickColor.background,
           min_confidence: quickConf,
+        });
+      }
+      if (quickRule && quickRuleName.trim() && categoryId) {
+        const ruleActions =
+          quickRuleAction === "add_label" && quickRuleLabelId
+            ? [{ type: "add_label", label_id: quickRuleLabelId }]
+            : [{ type: quickRuleAction }];
+        await post("/rules", {
+          name: quickRuleName.trim(),
+          match_category_id: categoryId,
+          match_min_confidence: quickRuleConf,
+          actions: ruleActions,
+          dry_run: true,
+        });
+      }
+      if (quickDigest && quickDigestName.trim() && categoryId) {
+        await post("/digests", {
+          name: quickDigestName.trim(),
+          enabled: true,
+          category_ids: [categoryId],
+          cron_times: quickDigestTimes.split(",").map((s) => s.trim()).filter(Boolean),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
+          min_confidence: 0.8,
         });
       }
       toast.success(category ? "Category updated" : "Category created");
@@ -157,6 +201,102 @@ function CategoryEditor({
             )}
           </div>
         )}
+
+        <div className="span2 quick-label-box">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={quickRule}
+              onChange={(e) => setQuickRule(e.target.checked)}
+            />
+            Also create a rule for this category (starts in dry-run)
+          </label>
+          {quickRule && (
+            <div className="quick-label-fields">
+              <label>
+                Rule name
+                <input
+                  value={quickRuleName}
+                  onChange={(e) => setQuickRuleName(e.target.value)}
+                  placeholder={form.name || "Rule name"}
+                />
+              </label>
+              <label>
+                Min confidence ≥ {pct(quickRuleConf)}
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={quickRuleConf}
+                  onChange={(e) => setQuickRuleConf(Number(e.target.value))}
+                />
+              </label>
+              <label>
+                Action
+                <select
+                  value={quickRuleAction}
+                  onChange={(e) =>
+                    setQuickRuleAction(e.target.value as "archive" | "mark_read" | "add_label")
+                  }
+                >
+                  <option value="archive">Archive</option>
+                  <option value="mark_read">Mark as read</option>
+                  <option value="add_label">Add label…</option>
+                </select>
+              </label>
+              {quickRuleAction === "add_label" && (
+                <label>
+                  Label
+                  <select
+                    value={quickRuleLabelId ?? ""}
+                    onChange={(e) =>
+                      setQuickRuleLabelId(e.target.value ? Number(e.target.value) : null)
+                    }
+                  >
+                    <option value="">pick a label…</option>
+                    {labels.map((lb) => (
+                      <option key={lb.id} value={lb.id}>
+                        {lb.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="span2 quick-label-box">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={quickDigest}
+              onChange={(e) => setQuickDigest(e.target.checked)}
+            />
+            Also create a digest for this category
+          </label>
+          {quickDigest && (
+            <div className="quick-label-fields">
+              <label>
+                Digest name
+                <input
+                  value={quickDigestName}
+                  onChange={(e) => setQuickDigestName(e.target.value)}
+                  placeholder={form.name || "Digest name"}
+                />
+              </label>
+              <label>
+                Send at (HH:MM, comma-separated)
+                <input
+                  value={quickDigestTimes}
+                  onChange={(e) => setQuickDigestTimes(e.target.value)}
+                  placeholder="07:00"
+                />
+              </label>
+            </div>
+          )}
+        </div>
       </div>
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
