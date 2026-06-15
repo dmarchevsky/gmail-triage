@@ -117,6 +117,11 @@ code {
   margin: 0;
 }
 
+.logo-mark {
+  display: block;
+  flex: none;
+}
+
 /* Sidebar collapse is a desktop-only affordance (mobile uses the drawer). */
 .collapse-btn,
 .sidebar-expand {
@@ -416,6 +421,14 @@ code {
   border-bottom: none;
 }
 
+/* Keep the recent-activity timestamp on one line (auto-layout table would
+   otherwise wrap it). Mobile renders Time as a subline and overrides this. */
+.activity-table td[data-label="Time"],
+.activity-table th:first-child {
+  white-space: nowrap;
+  min-width: 9.5rem;
+}
+
 tr.clickable {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -477,23 +490,17 @@ tr.clickable {
   }
 
   .emails-table .col-sender {
-    width: 17%;
+    width: 19%;
   }
 
   /* Subject column (no class) = nth-child(4) */
   .emails-table th:nth-child(4),
   .emails-table td:nth-child(4) {
-    width: 26%;
+    width: 29%;
   }
 
   .emails-table .col-cat {
     width: 11%;
-  }
-
-  .emails-table .col-conf {
-    width: 6%;
-    overflow: visible; /* always show the full confidence number */
-    text-overflow: clip;
   }
 
   .emails-table .col-status {
@@ -501,7 +508,7 @@ tr.clickable {
   }
 
   .emails-table .col-acts {
-    width: 10.5%;
+    width: 11.5%;
   }
 }
 

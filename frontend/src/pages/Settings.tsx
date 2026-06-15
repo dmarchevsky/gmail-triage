@@ -92,7 +92,16 @@ export function GmailConnect({ onChange }: { onChange?: () => void }) {
 
   return (
     <div className="settings-section">
-      <h3>Gmail</h3>
+      <h3>
+        Gmail{" "}
+        {connected ? (
+          <Badge tone={status?.gmail.status === "auth_error" ? "error" : "ok"}>
+            {status?.gmail.status === "auth_error" ? "auth error" : "connected"}
+          </Badge>
+        ) : (
+          <Badge tone="warn">not connected</Badge>
+        )}
+      </h3>
       {connected ? (
         <>
           <p>
@@ -302,7 +311,7 @@ function AuthSection({
 }
 
 export default function SettingsPage() {
-  const { refresh } = useApp();
+  const { refresh, status } = useApp();
   const toast = useToast();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -331,11 +340,14 @@ export default function SettingsPage() {
     }
   };
 
-  const numberFields: [keyof Settings, string, string][] = [
+  const pollingFields: [keyof Settings, string, string][] = [
     ["poll_interval_seconds", "Polling interval (seconds, min 60)", "300"],
     ["initial_lookback_hours", "Initial lookback (hours; 0 = only new mail)", "24"],
     ["classify_body_max_chars", "Classification body budget (chars)", "2000"],
     ["digest_body_max_chars", "Digest body budget (chars/email)", "6000"],
+  ];
+
+  const llmFields: [keyof Settings, string, string][] = [
     ["llm_classify_timeout_seconds", "LLM classify timeout (s)", "120"],
     ["llm_digest_timeout_seconds", "LLM digest timeout (s)", "300"],
     ["llm_max_concurrency", "LLM max in-flight requests", "1"],
@@ -353,7 +365,7 @@ export default function SettingsPage() {
       <div className="settings-section">
         <h3>Polling & processing</h3>
         <div className="form-grid">
-          {numberFields.map(([key, label, placeholder]) => (
+          {pollingFields.map(([key, label, placeholder]) => (
             <label key={key}>
               {label}
               <input
@@ -390,7 +402,7 @@ export default function SettingsPage() {
           className="primary"
           onClick={() => {
             const values: Record<string, unknown> = {};
-            for (const [key] of numberFields)
+            for (const [key] of pollingFields)
               if (draft[key] !== undefined) values[key] = Number(draft[key]);
             if (draft.ignore_senders !== undefined)
               values.ignore_senders = draft.ignore_senders
@@ -405,7 +417,12 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-section">
-        <h3>LLM endpoint</h3>
+        <h3>
+          LLM Processing{" "}
+          <Badge tone={status?.llm.status === "ok" ? "ok" : "warn"}>
+            {status?.llm.status === "ok" ? "reachable" : (status?.llm.status ?? "unknown")}
+          </Badge>
+        </h3>
         <div className="form-grid">
           <label>
             Base URL (empty = LLM_BASE_URL env)
@@ -422,16 +439,29 @@ export default function SettingsPage() {
               onChange={(e) => setDraft({ ...draft, llm_model: e.target.value })}
             />
           </label>
+          {llmFields.map(([key, label, placeholder]) => (
+            <label key={key}>
+              {label}
+              <input
+                type="number"
+                placeholder={placeholder}
+                value={num(key)}
+                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+              />
+            </label>
+          ))}
         </div>
         <div className="head-actions">
           <button
             className="primary"
-            onClick={() =>
-              saveValues({
-                ...(draft.llm_base_url !== undefined && { llm_base_url: draft.llm_base_url }),
-                ...(draft.llm_model !== undefined && { llm_model: draft.llm_model }),
-              })
-            }
+            onClick={() => {
+              const values: Record<string, unknown> = {};
+              if (draft.llm_base_url !== undefined) values.llm_base_url = draft.llm_base_url;
+              if (draft.llm_model !== undefined) values.llm_model = draft.llm_model;
+              for (const [key] of llmFields)
+                if (draft[key] !== undefined) values[key] = Number(draft[key]);
+              saveValues(values);
+            }}
           >
             Save LLM settings
           </button>
@@ -450,11 +480,21 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-section">
-        <h3>Telegram</h3>
+        <h3>
+          Telegram{" "}
+          {!settings.telegram_bot_token_configured ? (
+            <Badge tone="warn">not configured</Badge>
+          ) : (
+            <Badge tone={status?.telegram.status === "ok" ? "ok" : "warn"}>
+              {status?.telegram.status === "ok"
+                ? "configured"
+                : (status?.telegram.status ?? "configured")}
+            </Badge>
+          )}
+        </h3>
         <div className="form-grid">
           <label>
-            Bot token{" "}
-            {settings.telegram_bot_token_configured && <Badge tone="ok">configured ✓</Badge>}
+            Bot token
             <input
               type="password"
               placeholder="123456:ABC-DEF…"

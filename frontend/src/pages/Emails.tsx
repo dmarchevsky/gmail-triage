@@ -443,7 +443,6 @@ export default function Emails() {
             <th className="col-sender">Sender</th>
             <th>Subject</th>
             <th className="col-cat">Category</th>
-            <th className="col-conf">Conf.</th>
             <th className="col-status">Status</th>
             <th className="col-acts">Actions</th>
           </tr>
@@ -462,7 +461,6 @@ export default function Emails() {
               <td data-label="Sender" className="ellipsis">{e.sender}</td>
               <td data-label="Subject" className="ellipsis">{e.subject}</td>
               <td data-label="Category">{e.classification ?? "—"}</td>
-              <td data-label="Conf.">{conf(e.confidence)}</td>
               <td data-label="Status">
                 <Badge tone={statusTone(e.status)}>{e.status}</Badge>{" "}
                 {e.dry_run && e.actions.length > 0 && <Badge tone="dry">dry</Badge>}
@@ -476,7 +474,7 @@ export default function Emails() {
           ))}
           {list && list.items.length === 0 && (
             <tr>
-              <td colSpan={8} className="sub">
+              <td colSpan={7} className="sub">
                 No emails match.
               </td>
             </tr>

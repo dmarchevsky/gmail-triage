@@ -183,6 +183,7 @@ function Shell() {
       </button>
       <aside className={`sidebar ${navOpen ? "open" : ""}`}>
         <div className="logo-row">
+          <img className="logo-mark" src="/favicon.svg" alt="" width={20} height={20} />
           <h1 className="logo">MailTriage</h1>
           <button
             className="collapse-btn icon-btn"

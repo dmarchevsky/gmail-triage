@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ColorSwatch, Label, del, get, post, put } from "../api";
-import { Badge, ConfirmDialog, LabelPill, Modal, SwatchPicker } from "../components";
+import { ConfirmDialog, LabelPill, Modal, SwatchPicker } from "../components";
 import { useToast } from "../toast";
 
 function LabelEditor({
@@ -109,9 +109,6 @@ export default function Labels() {
                     textColor={lb.text_color}
                     backgroundColor={lb.background_color}
                   />
-                  {lb.is_system && (
-                    <> <Badge tone="neutral">system</Badge></>
-                  )}
                 </td>
                 <td data-label="Gmail">
                   {lb.is_system
