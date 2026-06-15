@@ -13,11 +13,11 @@ classify_pending() remains for the synchronous /classify/run-now endpoint.
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
-from app.models import Category, Email, EmailStatus
+from app.models import Category, DigestRun, DigestRunStatus, Email, EmailStatus
 from app.services import llm, settings_service
 from app.services.gmail import GmailAuthError, GmailClient, GmailNotFound
 from app.services.matchers import sender_matches
@@ -27,6 +27,8 @@ log = get_logger(__name__)
 
 _IDLE_SLEEP = 5    # seconds between queue polls when nothing pending
 _LLM_BACKOFF = 60  # seconds to wait after LLMUnavailable before retrying
+_RECOVERY_INTERVAL = 60  # seconds between recovery sweeps (stall_checker)
+_ERROR_RETRY_EVERY = 10  # retry `error` emails every Nth sweep (~10 min)
 
 CLASSIFICATION_SCHEMA_TEMPLATE = {
     "type": "object",
@@ -75,6 +77,7 @@ async def fetch_body(session: Session, client: GmailClient, email: Email) -> str
 
 async def classify_email(session: Session, client: GmailClient, email: Email,
                          categories: list[Category], settings: dict) -> None:
+    email.attempts = (email.attempts or 0) + 1
     try:
         body = await fetch_body(session, client, email)
     except GmailNotFound:
@@ -286,29 +289,89 @@ async def queue_loop() -> None:
             await asyncio.sleep(_IDLE_SLEEP)
 
 
+def _recover_stalled_emails(session: Session, settings: dict) -> None:
+    """Reset emails stuck in `processing` back to `pending` (or `error` once the
+    attempt cap is hit). Also catches orphaned rows whose `processing_started_at`
+    is NULL — `NULL < cutoff` is never true in SQL, so they would otherwise never
+    be recovered."""
+    timeout = float(settings.get("llm_classify_timeout_seconds") or 120) + 30
+    max_attempts = int(settings.get("classify_max_attempts") or 5)
+    cutoff = datetime.now(UTC) - timedelta(seconds=timeout)
+    stalled = list(session.scalars(
+        select(Email).where(
+            Email.status == EmailStatus.processing.value,
+            or_(Email.processing_started_at < cutoff,
+                Email.processing_started_at.is_(None)),
+        )
+    ))
+    for e in stalled:
+        e.processing_started_at = None
+        if (e.attempts or 0) >= max_attempts:
+            e.status = EmailStatus.error.value
+            e.error = f"Stalled in processing; gave up after {e.attempts} attempts"
+            log.warning("stalled_email_failed", email_id=e.id, attempts=e.attempts)
+        else:
+            e.status = EmailStatus.pending.value
+            log.warning("stalled_email_reset", email_id=e.id, attempts=e.attempts)
+
+
+def _recover_error_emails(session: Session, settings: dict) -> None:
+    """Retry emails left in `error` by resetting them to `pending`, while under
+    the attempt cap. At the cap they stay terminally `error` so a permanently
+    broken email (deleted in Gmail, invalid LLM output) can't hot-loop."""
+    max_attempts = int(settings.get("classify_max_attempts") or 5)
+    retryable = list(session.scalars(
+        select(Email).where(
+            Email.status == EmailStatus.error.value,
+            Email.attempts < max_attempts,
+        )
+    ))
+    for e in retryable:
+        e.status = EmailStatus.pending.value
+        e.processing_started_at = None
+        log.info("error_email_retry", email_id=e.id, attempts=e.attempts)
+
+
+def _recover_stalled_digests(session: Session, settings: dict) -> None:
+    """Fail digest runs stuck in `running` past a generous threshold — e.g. when a
+    restart killed the process mid-summarization so run_digest's finally never ran."""
+    digest_timeout = float(settings.get("llm_digest_timeout_seconds") or 300)
+    threshold = max(digest_timeout * 2, 1800)
+    cutoff = datetime.now(UTC) - timedelta(seconds=threshold)
+    stalled = list(session.scalars(
+        select(DigestRun).where(
+            DigestRun.status == DigestRunStatus.running.value,
+            DigestRun.started_at < cutoff,
+        )
+    ))
+    for run in stalled:
+        run.status = DigestRunStatus.error.value
+        if not run.error:
+            run.error = "Stalled run recovered (no completion within threshold)"
+        if run.finished_at is None:
+            run.finished_at = datetime.now(UTC)
+        log.warning("stalled_digest_run_recovered", run_id=run.id,
+                    digest_id=run.digest_id)
+
+
 async def stall_checker() -> None:
-    """Periodic task: reset emails stuck in processing back to pending."""
+    """Periodic recovery sweep: reset stalled `processing` emails, retry `error`
+    emails (bounded by classify_max_attempts), and fail digest runs stuck in
+    `running`. Crash-safe — never lets an exception escape the loop."""
     log.info("stall_checker_started")
+    tick = 0
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(_RECOVERY_INTERVAL)
+        tick += 1
         from app.db import get_sessionmaker
         session = get_sessionmaker()()
         try:
             settings = settings_service.get_all_settings(session, redact=False)
-            timeout = float(settings.get("llm_classify_timeout_seconds") or 120) + 30
-            cutoff = datetime.now(UTC) - timedelta(seconds=timeout)
-            stalled = list(session.scalars(
-                select(Email).where(
-                    Email.status == EmailStatus.processing.value,
-                    Email.processing_started_at < cutoff,
-                )
-            ))
-            for e in stalled:
-                e.status = EmailStatus.pending.value
-                e.processing_started_at = None
-                log.warning("stalled_email_reset", email_id=e.id)
-            if stalled:
-                session.commit()
+            _recover_stalled_emails(session, settings)
+            if tick % _ERROR_RETRY_EVERY == 0:
+                _recover_error_emails(session, settings)
+            _recover_stalled_digests(session, settings)
+            session.commit()
         except Exception:  # noqa: BLE001
             log.exception("stall_checker_error")
         finally:

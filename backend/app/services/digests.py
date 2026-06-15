@@ -24,7 +24,7 @@ from app.models import (
 from app.services import gmail, llm, settings_service, telegram
 from app.services.audit import audit
 from app.services.classifier import fetch_body
-from app.services.gmail import GmailAuthError, GmailClient
+from app.services.gmail import GmailClient
 from app.state import app_state
 
 log = get_logger(__name__)
@@ -185,8 +185,9 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
             run.telegram_message_id = ",".join(ids)
             app_state.telegram_status = "ok"
             run.status = DigestRunStatus.success.value
-    except (llm.LLMError, telegram.TelegramError, GmailAuthError,
-            gmail.GmailError) as e:
+    except Exception as e:  # noqa: BLE001 — any failure must mark the run errored,
+        # never leave it stuck in `running` (CancelledError is BaseException and
+        # still propagates so shutdown/cancellation is not swallowed).
         run.status = DigestRunStatus.error.value
         run.error = str(e)[:500]
         if isinstance(e, telegram.TelegramError):

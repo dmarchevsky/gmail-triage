@@ -29,6 +29,9 @@ DEFAULTS: dict[str, Any] = {
     "llm_classify_timeout_seconds": 120,
     "llm_digest_timeout_seconds": 300,
     "llm_max_concurrency": 1,
+    # Max classification attempts before an email is left terminally in `error`
+    # (the recovery loop retries `error`/stalled emails up to this many times).
+    "classify_max_attempts": 5,
     "telegram_bot_token": "",
     "telegram_default_chat_id": "",
     "gmail_client_secret_json": "",
