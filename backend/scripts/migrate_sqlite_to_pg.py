@@ -47,9 +47,14 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
 
     tables = Base.metadata.sorted_tables  # FK-safe order
 
+    def _user_row_count(conn, table) -> int:
+        stmt = select(func.count()).select_from(table)
+        if "is_system" in table.c:
+            stmt = stmt.where(table.c.is_system.is_not(True))
+        return conn.execute(stmt).scalar() or 0
+
     with target.connect() as t:
-        existing = sum(t.execute(select(func.count()).select_from(tb)).scalar() or 0
-                       for tb in tables)
+        existing = sum(_user_row_count(t, tb) for tb in tables)
         if existing and not force:
             print(f"Target already contains {existing} rows; refusing to copy. "
                   "Re-run with --force to append anyway (NOT recommended).")
@@ -59,6 +64,8 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
     with source.connect() as s, target.begin() as t:
         for table in tables:
             rows = [dict(r) for r in s.execute(select(table)).mappings()]
+            if "is_system" in table.c:
+                rows = [r for r in rows if not r.get("is_system")]
             if rows:
                 t.execute(insert(table), rows)
             src_count = len(rows)

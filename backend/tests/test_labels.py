@@ -68,7 +68,8 @@ def test_delete_label_blocked_while_used_by_rule(auth_client, db_session):
 
     forced = auth_client.delete(f"/api/v1/labels/{label['id']}?force=true")
     assert forced.status_code == 200
-    assert auth_client.get("/api/v1/labels").json() == []
+    user_labels = [l for l in auth_client.get("/api/v1/labels").json() if not l["is_system"]]
+    assert user_labels == []
 
 
 def test_rule_rejects_unknown_label_id(auth_client):

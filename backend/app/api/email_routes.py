@@ -161,7 +161,10 @@ async def reclassify_email(email_id: int,
     if not client_secret:
         raise HTTPException(status_code=409, detail="Gmail is not connected")
 
-    session.execute(delete(EmailAction).where(EmailAction.email_id == email_id))
+    session.execute(delete(EmailAction).where(
+        EmailAction.email_id == email_id,
+        EmailAction.executed.is_not(True),
+    ))
     email.classification_id = None
     email.confidence = None
     email.rationale = None
@@ -214,7 +217,10 @@ async def reclassify_bulk(body: BulkEmailIds,
     if not client_secret:
         raise HTTPException(status_code=409, detail="Gmail is not connected")
 
-    session.execute(delete(EmailAction).where(EmailAction.email_id.in_(body.email_ids)))
+    session.execute(delete(EmailAction).where(
+        EmailAction.email_id.in_(body.email_ids),
+        EmailAction.executed.is_not(True),
+    ))
     emails = list(session.scalars(select(Email).where(Email.id.in_(body.email_ids))))
     for email in emails:
         email.classification_id = None

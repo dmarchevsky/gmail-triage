@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 
 from alembic import op
-from app.models import Label, Rule
+from app.models import Rule
 
 revision = 'a8f28ca13ed0'
 down_revision = 'bc67c32f9a96'
@@ -41,12 +41,16 @@ def upgrade() -> None:
     name_to_label_id: dict[str, int] = {}
     cat_to_label_id: dict[int, int] = {}
 
+    _labels = sa.table('labels',
+                        sa.column('name'), sa.column('created_at'), sa.column('updated_at'))
+
     def get_or_create(label_name: str) -> int:
         if label_name in name_to_label_id:
             return name_to_label_id[label_name]
-        res = conn.execute(sa.insert(Label.__table__).values(
+        conn.execute(sa.insert(_labels).values(
             name=label_name, created_at=now, updated_at=now))
-        lid = res.inserted_primary_key[0]
+        lid = conn.execute(
+            sa.text("SELECT id FROM labels WHERE name = :n"), {"n": label_name}).scalar()
         name_to_label_id[label_name] = lid
         return lid
 

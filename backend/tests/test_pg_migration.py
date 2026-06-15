@@ -143,7 +143,8 @@ def test_labels_split_from_categories_migration(tmp_path):
 
     command.upgrade(cfg, "head")
     with engine.connect() as conn:
-        labels = conn.execute(text("SELECT id, name FROM labels")).fetchall()
+        labels = conn.execute(
+            text("SELECT id, name FROM labels WHERE NOT is_system")).fetchall()
         assert [(r[0], r[1]) for r in labels] == [(1, "MailTriage/MarketNews")]
         actions = json.loads(conn.execute(text("SELECT actions FROM rules")).scalar())
         assert actions == [{"type": "add_label", "label_id": 1}, {"type": "mark_read"}]
