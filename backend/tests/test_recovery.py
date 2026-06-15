@@ -141,3 +141,40 @@ def test_run_digest_unexpected_error_marks_run_error(auth_client, db_session,
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
     assert run["status"] == "error"
     assert "kaboom" in (run["error"] or "")
+
+
+# ── concurrent-run guard ─────────────────────────────────────────────────────
+
+def test_concurrent_run_blocked_returns_in_progress(auth_client, db_session):
+    """A second run for a digest that is already `running` must not start a new
+    run — it returns the in-progress one instead."""
+    d = auth_client.post("/api/v1/digests", json={
+        "name": "g", "category_ids": [], "cron_times": ["07:00"]}).json()
+    in_progress = DigestRun(digest_id=d["id"], status=DigestRunStatus.running.value,
+                            started_at=datetime.now(UTC))
+    db_session.add(in_progress)
+    db_session.commit()
+
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    assert run["id"] == in_progress.id
+    assert run["status"] == DigestRunStatus.running.value
+    # No second run row was created.
+    count = db_session.query(DigestRun).filter_by(digest_id=d["id"]).count()
+    assert count == 1
+
+
+def test_stale_running_run_does_not_block(auth_client, db_session):
+    """An orphaned `running` run past the stale threshold (e.g. left by a crash)
+    must not block a new run forever."""
+    d = auth_client.post("/api/v1/digests", json={
+        "name": "g2", "category_ids": [], "cron_times": ["07:00"]}).json()
+    stale = DigestRun(digest_id=d["id"], status=DigestRunStatus.running.value,
+                      started_at=datetime.now(UTC) - timedelta(hours=2))
+    db_session.add(stale)
+    db_session.commit()
+
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    assert run["id"] != stale.id            # a fresh run proceeded
+    assert run["status"] == "empty"         # no categories -> nothing eligible
+    count = db_session.query(DigestRun).filter_by(digest_id=d["id"]).count()
+    assert count == 2

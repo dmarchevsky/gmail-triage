@@ -332,12 +332,17 @@ def _recover_error_emails(session: Session, settings: dict) -> None:
         log.info("error_email_retry", email_id=e.id, attempts=e.attempts)
 
 
+def digest_stale_after_seconds(settings: dict) -> float:
+    """How long a digest run may sit in `running` before it is presumed dead.
+    Comfortably above a normal run so legitimately-slow summarizations aren't
+    cut off. Shared by the recovery sweep and run_digest's concurrency guard."""
+    return max(float(settings.get("llm_digest_timeout_seconds") or 300) * 2, 1800)
+
+
 def _recover_stalled_digests(session: Session, settings: dict) -> None:
     """Fail digest runs stuck in `running` past a generous threshold — e.g. when a
     restart killed the process mid-summarization so run_digest's finally never ran."""
-    digest_timeout = float(settings.get("llm_digest_timeout_seconds") or 300)
-    threshold = max(digest_timeout * 2, 1800)
-    cutoff = datetime.now(UTC) - timedelta(seconds=threshold)
+    cutoff = datetime.now(UTC) - timedelta(seconds=digest_stale_after_seconds(settings))
     stalled = list(session.scalars(
         select(DigestRun).where(
             DigestRun.status == DigestRunStatus.running.value,

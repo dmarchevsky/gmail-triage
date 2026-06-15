@@ -7,7 +7,7 @@ dry_run) and does not consume eligibility; failed sends (status error) also
 keep emails eligible.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -23,7 +23,7 @@ from app.models import (
 )
 from app.services import gmail, llm, settings_service, telegram
 from app.services.audit import audit
-from app.services.classifier import fetch_body
+from app.services.classifier import digest_stale_after_seconds, fetch_body
 from app.services.gmail import GmailClient
 from app.state import app_state
 
@@ -142,6 +142,27 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
     """preview=True renders the summary (status dry_run) without sending and
     without consuming eligibility."""
     settings = settings_service.get_all_settings(session, redact=False)
+
+    # Guard against concurrent runs of the same digest (e.g. a double-clicked
+    # "run now" or a scheduled run overlapping a manual one). The `running` row
+    # is committed first thing below, so a slightly-later run sees it and skips.
+    # Only a *fresh* run blocks — an orphaned `running` row left by a crash is
+    # past the stale threshold (and the recovery sweep will fail it), so it
+    # must not block forever. Previews are read-only and never block / are blocked.
+    if not preview:
+        fresh_cutoff = datetime.now(UTC) - timedelta(
+            seconds=digest_stale_after_seconds(settings))
+        in_progress = session.scalars(
+            select(DigestRun)
+            .where(DigestRun.digest_id == digest.id,
+                   DigestRun.status == DigestRunStatus.running.value,
+                   DigestRun.started_at > fresh_cutoff)
+            .order_by(DigestRun.started_at.desc())
+        ).first()
+        if in_progress is not None:
+            log.warning("digest_run_skipped_already_running",
+                        digest_id=digest.id, run_id=in_progress.id)
+            return in_progress
 
     run = DigestRun(digest_id=digest.id, status=DigestRunStatus.running.value)
     session.add(run)
