@@ -160,6 +160,8 @@ async def apply_rules_to_email(session: Session, client: GmailClient | None,
         params = dict(action)
         if label is not None:
             params["label_name"] = label.name
+            params["text_color"] = label.text_color
+            params["background_color"] = label.background_color
         session.add(EmailAction(
             email_id=email.id, rule_id=_rule.id,
             action_type=action["type"], action_params=params,

@@ -1,11 +1,12 @@
 # MailTriage
 
 Self-hosted LLM email triage for a single Gmail account. MailTriage polls your
-inbox, classifies mail with a **local** llama.cpp model against plain-language
-criteria you write, applies rules (label / mark read / archive / trash), and
-sends scheduled Telegram digests. Everything is configured through a built-in
-web UI. A global **dry-run** mode (on by default) lets you review what *would*
-happen before anything touches your mailbox.
+inbox (and any other Gmail tabs you choose), classifies mail with a **local**
+llama.cpp model against plain-language criteria you write, applies rules (label /
+mark read / archive / trash), and sends scheduled Telegram digests. Everything
+is configured through a built-in web UI. Each rule has its own **dry-run** flag
+(on by default) so you can review what *would* happen before anything touches
+your mailbox.
 
 **Hard guarantees**
 
@@ -47,7 +48,7 @@ a local SQLite file under `./data` instead.
 
 Open http://localhost:8080, log in with `UI_PASSWORD`, and follow the
 first-run wizard: connect Gmail → test the LLM → create your first category.
-Dry-run stays ON until you disable it from the sidebar.
+Rules start in dry-run mode until you disable it per-rule.
 
 ## 2. Google Cloud OAuth app setup (one-time, ~5 min)
 
@@ -120,30 +121,76 @@ tokens/request; digest synthesis up to ~8k (`-c 8192`).
 
 ## 5. Using MailTriage
 
-1. **Categories** — write plain-language criteria; that text *is* the LLM
-   prompt. Each category maps to a Gmail label (`MailTriage/<Name>` by
-   default), auto-created when first used.
-2. **Rules** — ordered matchers (category, min confidence, optional sender
-   pattern) → actions (`add_label`, `remove_label`, `mark_read`, `archive`,
-   `trash`). First match wins unless "stop processing" is off. A sender
-   pattern rule with *no* category is a **hard rule**: it classifies
-   deterministically with confidence 1.0 and bypasses the LLM. No rule
-   matched → email is left untouched, always.
-3. **Dry-run** — pipeline runs fully, planned actions are recorded and
-   badged in the UI, nothing in Gmail changes, digests render in the UI
-   instead of sending. Disabling dry-run never retro-executes old plans.
-4. **Digests** — pick categories, times (e.g. `07:00, 16:00`) + timezone,
-   min confidence, chat id. Two-stage summarization (per-email
-   micro-summaries → synthesis). No email is ever summarized twice by the
-   same digest; failed sends keep emails eligible for the next run.
-   Example: *Market news — 07:00 & 16:00 — category MarketNews — min
-   confidence 0.8.*
-5. **Feedback** — flag a misclassified email (correct category + note); the
-   LLM proposes a criteria revision shown as a diff; approve / edit / reject.
-   Approval bumps the category's criteria version (full history with diffs
-   and restore in the Categories page). Dashboard shows per-category
-   empirical precision — LLM confidence is *not calibrated*; tune rule
-   thresholds against these counts.
+### Categories
+
+Write plain-language criteria; that text *is* the LLM prompt. The category
+editor also lets you **quick-create a rule or a digest** for the category in
+the same step — handy when setting up a new category from scratch.
+
+Full edit history (criteria versions with diffs) is accessible from the
+category row; any version can be restored.
+
+### Labels
+
+Labels are Gmail labels that rules apply to emails. They are managed
+independently from categories on the **Labels** page. Predefined system
+labels — **Important**, **Starred**, and **Spam** — are always available and
+cannot be deleted. User labels support Gmail's slash-nested naming
+(`MailTriage/Finance`) and custom colors. A label is created in Gmail the
+first time a live (non-dry-run) rule uses it.
+
+### Rules
+
+Ordered matchers → actions. Each rule specifies:
+
+- **Match:** category + min confidence, optional sender pattern (glob).
+- **Actions:** `add_label`, `remove_label`, `mark_read`, `archive`, `trash`
+  (one or more per rule).
+- **Dry-run flag** (per-rule, default on): planned actions are recorded and
+  shown in the UI but nothing in Gmail changes. Disabling dry-run never
+  retro-executes previously planned actions.
+- **Stop processing:** checked by default; first match wins. Uncheck to let
+  lower-priority rules also fire.
+
+A sender-pattern rule with *no* category is a **hard rule**: it classifies
+deterministically with confidence 1.0 and bypasses the LLM entirely.
+
+### Emails
+
+The Emails page lists all processed mail with filterable columns (category,
+status, confidence, free-text). Clicking a row opens the detail view with
+classification rationale, planned/executed actions, and a feedback form. From
+the detail view you can re-run classification + rules for a single email.
+
+Bulk operations (multi-select checkboxes): re-classify with LLM, or re-run
+rules only. The selection bar offers **"Select all N matching emails"** to
+extend a page selection across all pages without pagination limits.
+
+### Mailbox scope
+
+By default MailTriage polls your Inbox. Settings → **Poll scope** lets you
+add Gmail's tabbed categories (Promotions, Social, Updates, Forums) so
+newsletters or social notifications are triaged too — without having to move
+them to the Inbox first.
+
+### Digests
+
+Pick categories, send times (e.g. `07:00, 16:00`) + timezone, min
+confidence, and optionally a per-digest Telegram chat id. Two-stage
+summarization (per-email micro-summaries → synthesis). No email is
+summarized twice by the same digest; failed sends keep emails eligible for
+the next run. Example: *Market news — 07:00 & 16:00 — category MarketNews —
+min confidence 0.8.*
+
+### Feedback & criteria refinement
+
+Flag a misclassified email (correct category + optional note). The LLM
+proposes a criteria revision shown as a diff, consolidated with any other
+pending feedback for the same category. Approve / edit / reject from the
+**Feedback** page. Approval bumps the category's criteria version (full
+history with restore). The Dashboard shows per-category empirical precision —
+LLM confidence is *not calibrated*; tune rule thresholds against these
+empirical counts.
 
 ## 6. Operations
 

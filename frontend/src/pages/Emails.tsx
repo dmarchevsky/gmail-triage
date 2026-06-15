@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Category, EmailList, EmailRow, StatusResponse, get, post } from "../api";
-import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, Modal, actionLabel, conf, fmtDate } from "../components";
+import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
 function statusTone(status: string): "ok" | "warn" | "error" | "neutral" {
@@ -114,22 +114,42 @@ function EmailDetail({
         {email.error && <p className="error">Error: {email.error}</p>}
 
         <h4>{email.dry_run ? "Planned actions (dry-run)" : "Actions"}</h4>
-        {email.actions.length === 0 && <p className="sub">No actions.</p>}
-        <ul className="action-list">
-          {email.actions.map((a) => (
-            <li key={a.id}>
-              <code>{actionLabel(a.action_type)}</code>{" "}
-              {a.action_params?.label_name ? `→ ${a.action_params.label_name}` : ""}
-              {a.executed ? (
-                <Badge tone="ok">executed {fmtDate(a.executed_at)}</Badge>
-              ) : a.dry_run ? (
-                <Badge tone="dry">planned</Badge>
-              ) : (
-                <Badge tone="error">{a.error ? `failed: ${a.error}` : "not executed"}</Badge>
-              )}
-            </li>
-          ))}
-        </ul>
+        {(() => {
+          const maxExecutedAt = email.actions
+            .map((a) => a.executed_at)
+            .filter(Boolean)
+            .sort()
+            .at(-1) ?? null;
+          const displayActions = maxExecutedAt
+            ? email.actions.filter((a) => !a.executed_at || a.executed_at === maxExecutedAt)
+            : email.actions;
+          return (
+            <>
+              {displayActions.length === 0 && <p className="sub">No actions.</p>}
+              <ul className="action-list">
+                {displayActions.map((a) => (
+                  <li key={a.id}>
+                    <span>{actionLabel(a.action_type)}</span>{" "}
+                    {a.action_type === "add_label" && a.action_params?.label_name ? (
+                      <LabelPill
+                        name={String(a.action_params.label_name)}
+                        textColor={a.action_params.text_color as string | null}
+                        backgroundColor={a.action_params.background_color as string | null}
+                      />
+                    ) : null}{" "}
+                    {a.executed ? (
+                      <Badge tone="ok">executed {fmtDate(a.executed_at)}</Badge>
+                    ) : a.dry_run ? (
+                      <Badge tone="dry">planned</Badge>
+                    ) : (
+                      <Badge tone="error">{a.error ? `failed: ${a.error}` : "not executed"}</Badge>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          );
+        })()}
 
         <AsyncButton
           onClick={async () => {
@@ -259,13 +279,11 @@ export default function Emails() {
   const doBulkReclassify = async () => {
     const ids = Array.from(selectedIds);
     try {
-      const r = await post<{ queued: number; classified: number; skipped: number; errors: number }>(
+      const r = await post<{ queued: number }>(
         "/emails/reclassify-bulk",
         { email_ids: ids },
       );
-      toast.success(
-        `Queued ${r.queued} emails for re-classification (${r.classified} done, ${r.errors} errors)`,
-      );
+      toast.success(`Re-classifying ${r.queued} emails in the background…`);
       clearSelection();
       await load();
     } catch (e) {

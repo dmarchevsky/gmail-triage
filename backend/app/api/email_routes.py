@@ -1,5 +1,6 @@
 """Emails listing/detail + dashboard stats + audit log."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,7 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.db import get_session
+from app.db import get_session, get_sessionmaker
+from app.state import app_state
 from app.models import AuditLog, Category, Email, EmailAction, Feedback
 
 router = APIRouter()
@@ -202,11 +204,10 @@ async def reclassify_bulk(body: BulkEmailIds,
     from sqlalchemy import delete
 
     from app.models import EmailStatus
-    from app.services import classifier, llm, settings_service
-    from app.services.gmail import GmailAuthError
+    from app.services import classifier, settings_service
 
     if not body.email_ids:
-        return {"queued": 0, "classified": 0, "skipped": 0, "errors": 0, "pending_left": 0}
+        return {"queued": 0}
 
     settings = settings_service.get_all_settings(session, redact=False)
     client_secret = settings.get("gmail_client_secret_json")
@@ -224,14 +225,21 @@ async def reclassify_bulk(body: BulkEmailIds,
         email.status = EmailStatus.pending.value
     session.commit()
 
-    try:
-        result = await classifier.classify_pending(session, limit=len(body.email_ids))
-    except GmailAuthError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    except llm.LLMUnavailable as e:
-        raise HTTPException(status_code=503,
-                            detail=f"LLM unreachable; emails left pending: {e}") from e
-    return {"queued": len(emails), **result}
+    n = len(emails)
+
+    async def _classify_bg() -> None:
+        bg_session = get_sessionmaker()()
+        try:
+            await classifier.classify_pending(bg_session, limit=n)
+        except Exception:
+            pass
+        finally:
+            bg_session.close()
+
+    if not app_state.classifier_running:
+        asyncio.create_task(_classify_bg())
+
+    return {"queued": n}
 
 
 @router.post("/emails/rerun-rules-bulk")

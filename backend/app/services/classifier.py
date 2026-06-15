@@ -173,7 +173,7 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
                 break
             app_state.classifier_done += 1
             if email.status == EmailStatus.pending.value:
-                break  # no categories to classify against; leave the rest
+                continue  # no categories to classify against; skip and keep going
             if email.status == EmailStatus.skipped.value:
                 counts["skipped"] += 1
             elif email.status == EmailStatus.error.value:
