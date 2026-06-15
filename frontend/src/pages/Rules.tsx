@@ -623,12 +623,12 @@ export default function Rules() {
                 )}
               </td>
               <td data-label="Name">
-                <b>{r.name}</b>
-                {r.is_default && (
-                  <>
-                    {" "}
-                    <Badge tone="info">default</Badge>
-                  </>
+                {r.is_default ? (
+                  <b>
+                    <i>{r.name}</i>
+                  </b>
+                ) : (
+                  <b>{r.name}</b>
                 )}
               </td>
               <td data-label="Match">

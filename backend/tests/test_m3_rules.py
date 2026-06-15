@@ -354,9 +354,9 @@ def test_action_failure_recorded_not_executed(auth_client, db_session, pipeline)
     assert gmail_mod is not None
 
 
-# ── Rules CRUD/reorder/test ──────────────────────────────────────────────────
+# ── Rules CRUD/reorder ───────────────────────────────────────────────────────
 
-def test_rules_crud_reorder_and_test(auth_client, db_session):
+def test_rules_crud_and_reorder(auth_client, db_session):
     r1 = auth_client.post("/api/v1/rules", json={
         "name": "A", "priority": 10, "actions": [{"type": "mark_read"}]}).json()
     r2 = auth_client.post("/api/v1/rules", json={
@@ -371,16 +371,6 @@ def test_rules_crud_reorder_and_test(auth_client, db_session):
     reordered = auth_client.post("/api/v1/rules/reorder", json={
         "ordered_ids": [r2["id"], r1["id"]]}).json()
     assert [r["name"] for r in reordered if not r["is_default"]] == ["B", "A"]
-
-    db_session.add(Email(gmail_message_id="t1", sender="x@y.com", subject="s",
-                         status="classified", confidence=0.9))
-    db_session.add(Email(gmail_message_id="t2", sender="x@y.com", subject="s2",
-                         status="classified", confidence=0.3))
-    db_session.commit()
-
-    result = auth_client.post(f"/api/v1/rules/{r2['id']}/test", json={}).json()
-    assert result["tested"] == 2
-    assert result["matched"] == 1  # only the 0.9-confidence one passes 0.5 gate
 
     assert auth_client.delete(f"/api/v1/rules/{r1['id']}").status_code == 200
     remaining = auth_client.get("/api/v1/rules").json()

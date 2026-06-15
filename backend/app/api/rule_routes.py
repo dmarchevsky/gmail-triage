@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import Email, EmailAction, EmailStatus, Label, Rule
+from app.models import EmailAction, Label, Rule
 from app.services import rules as rules_engine
 from app.services.audit import audit
 
@@ -108,11 +108,6 @@ class BulkRuleUpdate(BaseModel):
     dry_run: bool | None = None
 
 
-class BulkTestBody(BaseModel):
-    rule_ids: list[int]
-    limit: int = Field(default=20, ge=1, le=50)
-
-
 class DefaultRuleIn(BaseModel):
     """Editable fields of the catch-all rule: action(s) may be empty (no-op)."""
     enabled: bool = True
@@ -212,31 +207,6 @@ def delete_rule(rule_id: int, session: Session = Depends(get_session)) -> dict:
     return {"deleted": rule_id}
 
 
-@router.post("/bulk-test")
-def bulk_test_rules(body: BulkTestBody,
-                    session: Session = Depends(get_session)) -> dict:
-    """Evaluate multiple rules against the last N classified emails. No execution."""
-    if not body.rule_ids:
-        return {"results": []}
-    rules = list(session.scalars(select(Rule).where(Rule.id.in_(body.rule_ids))))
-    emails = list(session.scalars(
-        select(Email).where(Email.status.in_(
-            [EmailStatus.classified.value, EmailStatus.actioned.value]))
-        .order_by(Email.received_at.desc()).limit(body.limit)))
-    results = []
-    for rule in rules:
-        matches = [
-            {"email_id": e.id, "subject": e.subject, "sender": e.sender,
-             "confidence": e.confidence,
-             "planned_actions": [a["type"] for a in rule.actions or []]}
-            for e in emails if rules_engine.rule_matches(rule, e)
-        ]
-        results.append({"rule_id": rule.id, "rule_name": rule.name,
-                        "tested": len(emails), "match_count": len(matches),
-                        "matches": matches})
-    return {"results": results}
-
-
 @router.post("/reorder")
 def reorder(body: ReorderBody, session: Session = Depends(get_session)) -> list[dict]:
     rules = {r.id: r for r in session.scalars(select(Rule))}
@@ -334,33 +304,3 @@ async def reapply_bulk(body: BulkRuleIds,
         if client is not None:
             await client.aclose()
     return totals
-
-
-class TestBody(BaseModel):
-    limit: int = Field(default=20, ge=1, le=200)
-
-
-@router.post("/{rule_id}/test")
-def test_rule(rule_id: int, body: TestBody,
-              session: Session = Depends(get_session)) -> dict:
-    """Evaluate one rule against the last N classified emails. No execution."""
-    rule = session.get(Rule, rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Rule not found")
-    emails = session.scalars(
-        select(Email).where(Email.status.in_(
-            [EmailStatus.classified.value, EmailStatus.actioned.value]))
-        .order_by(Email.received_at.desc()).limit(body.limit))
-    matches = []
-    tested = 0
-    for email in emails:
-        tested += 1
-        if rules_engine.rule_matches(rule, email):
-            matches.append({
-                "email_id": email.id,
-                "subject": email.subject,
-                "sender": email.sender,
-                "confidence": email.confidence,
-                "planned_actions": [a["type"] for a in rule.actions or []],
-            })
-    return {"tested": tested, "matched": len(matches), "matches": matches}
