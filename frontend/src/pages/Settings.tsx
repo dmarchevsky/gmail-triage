@@ -347,11 +347,11 @@ export default function SettingsPage() {
   const pollingFields: [keyof Settings, string, string][] = [
     ["poll_interval_seconds", "Polling interval (seconds, min 60)", "300"],
     ["initial_lookback_hours", "Initial lookback (hours; 0 = only new mail)", "24"],
-    ["classify_body_max_chars", "Classification body budget (chars)", "2000"],
-    ["digest_body_max_chars", "Digest body budget (chars/email)", "6000"],
   ];
 
   const llmFields: [keyof Settings, string, string][] = [
+    ["classify_body_max_chars", "Classification body budget (chars)", "2000"],
+    ["digest_body_max_chars", "Digest body budget (chars/email)", "6000"],
     ["llm_classify_timeout_seconds", "LLM classify timeout (s)", "120"],
     ["llm_digest_timeout_seconds", "LLM digest timeout (s)", "300"],
     ["llm_max_concurrency", "LLM max in-flight requests", "1"],
