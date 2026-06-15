@@ -299,6 +299,66 @@ def test_batch_parse_falls_back_when_unnumbered(auth_client, db_session, digest_
     assert chat.call_count == 4
 
 
+@respx.mock
+def test_empty_synthesis_falls_back_to_micro_summaries(auth_client, db_session,
+                                                       digest_setup):
+    """Synthesis returns blank on both attempts → body falls back to the
+    per-email micro-summaries, run still succeeds and the message is non-blank."""
+    def handler(request):
+        body = request.content.decode()
+        if "Produce the digest now" in body:
+            return llm_response("   ")            # synthesis blank both attempts
+        return llm_response("[1] Micro one.\n[2] Micro two.")
+
+    chat = respx.post(CHAT_URL).mock(side_effect=handler)
+    tg = respx.post(TG_SEND).mock(return_value=tg_ok())
+    d = digest_setup["digest"]
+
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    assert run["status"] == "success"
+    assert "Micro one." in run["summary_text"]    # fell back to micro bullets
+    assert "Micro two." in run["summary_text"]
+    sent = json.loads(tg.calls[0].request.content)
+    assert "Micro one." in sent["text"]
+    # 1 batched micro + 2 synthesis attempts (both blank, then fallback).
+    assert chat.call_count == 3
+
+
+@respx.mock
+def test_empty_synthesis_retry_recovers(auth_client, db_session, digest_setup):
+    """First synthesis attempt blank, second returns text → the retry text wins."""
+    state = {"synthesis": 0}
+
+    def handler(request):
+        body = request.content.decode()
+        if "Produce the digest now" in body:
+            state["synthesis"] += 1
+            return llm_response("" if state["synthesis"] == 1 else "Recovered body.")
+        return llm_response("[1] Micro one.\n[2] Micro two.")
+
+    respx.post(CHAT_URL).mock(side_effect=handler)
+    respx.post(TG_SEND).mock(return_value=tg_ok())
+    d = digest_setup["digest"]
+
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    assert run["status"] == "success"
+    assert run["summary_text"] == "Recovered body."
+    assert state["synthesis"] == 2                 # retried exactly once
+
+
+@respx.mock
+def test_fully_empty_body_errors_without_sending(auth_client, db_session, digest_setup):
+    """Every LLM call blank → no usable body anywhere → run errors, nothing sent."""
+    respx.post(CHAT_URL).mock(return_value=llm_response(""))
+    tg = respx.post(TG_SEND).mock(return_value=tg_ok())
+    d = digest_setup["digest"]
+
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    assert run["status"] == "error"
+    assert run["error"]
+    assert tg.call_count == 0                       # never shipped a blank digest
+
+
 async def test_fetch_context_length_parses_props():
     from app.services import llm
 

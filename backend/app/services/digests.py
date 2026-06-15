@@ -177,11 +177,30 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
         f"micro-summary:\n\n" + "\n".join(micro)
         + f"\n\n{style}Produce the digest now."
     )
-    return (await llm.chat_text(
-        synthesis_system, synthesis_user, timeout=timeout,
-        max_concurrency=concurrency, settings=settings,
-        max_tokens=_clamp_tokens(synthesis_chars // 4 + 64, settings),
-    ))[:synthesis_chars]
+
+    async def synthesize() -> str:
+        return (await llm.chat_text(
+            synthesis_system, synthesis_user, timeout=timeout,
+            max_concurrency=concurrency, settings=settings,
+            max_tokens=_clamp_tokens(synthesis_chars // 4 + 64, settings),
+        )).strip()
+
+    body = await synthesize()
+    if not body:
+        # The local model returned no content — retry once, then fall back to the
+        # micro-summaries we already have so the digest is never blank. Each micro
+        # bullet carries a `- [sender | subject] ` prefix, so only fall back when at
+        # least one summary actually has content; otherwise return "" and let the
+        # caller fail the run rather than ship sender/subject lines as the "body".
+        micro_nonempty = sum(1 for m in micro if m.split("] ", 1)[-1].strip())
+        log.warning("digest_synthesis_empty_retrying", digest_id=digest.id,
+                    emails=len(emails), micro_nonempty=micro_nonempty)
+        body = await synthesize()
+        if not body:
+            log.warning("digest_synthesis_empty_fallback_micro", digest_id=digest.id,
+                        emails=len(emails), micro_nonempty=micro_nonempty)
+            body = "\n".join(micro).strip() if micro_nonempty else ""
+    return body[:synthesis_chars]
 
 
 def _render_message(digest: Digest, emails: list[Email], summary: str,
@@ -267,6 +286,11 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
 
         summary = await _summarize(session, digest, emails, settings)
         run.summary_text = summary
+        if not summary.strip():
+            # Empty after retry + micro-summary fallback: surface as a failed run
+            # rather than silently shipping a bodyless digest. Emails stay eligible.
+            raise llm.LLMError(
+                "digest body empty after retry and micro-summary fallback")
 
         if preview:
             run.status = DigestRunStatus.dry_run.value
