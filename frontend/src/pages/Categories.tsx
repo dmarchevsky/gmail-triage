@@ -388,11 +388,77 @@ function HistoryViewer({
   );
 }
 
+interface PreviewDiff {
+  email_id: number;
+  subject?: string;
+  old_category?: string;
+  new_category?: string;
+  new_confidence?: number;
+  rationale?: string;
+  error?: string;
+}
+
+function CategoryTest({ category, onClose }: { category: Category; onClose: () => void }) {
+  const [result, setResult] = useState<{
+    tested: number;
+    changed: number;
+    diffs: PreviewDiff[];
+    note: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    post<typeof result>(`/categories/${category.id}/reclassify-preview`, { days: 7, limit: 25 })
+      .then((r) => setResult(r))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, [category.id]);
+
+  return (
+    <Modal title={`Test criteria: ${category.name}`} onClose={onClose} wide>
+      {error ? (
+        <p className="sub">{error}</p>
+      ) : !result ? (
+        <p>Re-classifying recent emails against the current criteria…</p>
+      ) : (
+        <>
+          <p>
+            <b>{result.changed}</b> of {result.tested} recent emails in this category would
+            change classification under the current criteria. {result.note}
+          </p>
+          {result.diffs.length > 0 && (
+            <ul>
+              {result.diffs.map((d) => (
+                <li key={d.email_id}>
+                  {d.error ? (
+                    <span className="sub">#{d.email_id}: {d.error}</span>
+                  ) : (
+                    <>
+                      {d.subject}{" "}
+                      <span className="sub">
+                        {d.old_category} → {d.new_category}
+                        {d.new_confidence != null && ` (${pct(d.new_confidence)})`}
+                      </span>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="modal-actions">
+            <button onClick={onClose}>Close</button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 export default function Categories() {
   const toast = useToast();
   const [categories, setCategories] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Category | null | "new">(null);
   const [history, setHistory] = useState<Category | null>(null);
+  const [testing, setTesting] = useState<Category | null>(null);
   const [deleting, setDeleting] = useState<Category | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState<"delete" | null>(null);
@@ -517,6 +583,7 @@ export default function Categories() {
               <td data-label="Version">v{c.criteria_version}</td>
               <td data-label="Enabled">{c.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
               <td className="row-actions">
+                <button onClick={() => setTesting(c)}>Test</button>
                 <button onClick={() => setEditing(c)}>Edit</button>
                 <button onClick={() => setHistory(c)}>History</button>
                 <button className="danger" onClick={() => setDeleting(c)}>
@@ -546,6 +613,7 @@ export default function Categories() {
       {history && (
         <HistoryViewer category={history} onRestored={load} onClose={() => setHistory(null)} />
       )}
+      {testing && <CategoryTest category={testing} onClose={() => setTesting(null)} />}
       {deleting && (
         <ConfirmDialog
           title={`Delete category "${deleting.name}"?`}

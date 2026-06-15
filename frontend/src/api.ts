@@ -109,6 +109,7 @@ export interface Rule {
   actions: RuleAction[];
   stop_processing: boolean;
   dry_run: boolean;
+  is_default: boolean;
   pending_planned: number;
 }
 

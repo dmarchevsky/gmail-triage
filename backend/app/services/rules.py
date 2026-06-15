@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, model_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
@@ -65,15 +65,28 @@ def rule_matches(rule: Rule, email: Email) -> bool:
 
 
 def evaluate_rules(rules: list[Rule], email: Email) -> list[tuple[Rule, dict]]:
-    """Planned (rule, action) pairs in execution order."""
+    """Planned (rule, action) pairs in execution order.
+
+    The catch-all default rule (`is_default`) is always evaluated last and only
+    contributes its actions when no other rule matched.
+    """
     planned: list[tuple[Rule, dict]] = []
-    for rule in sorted(rules, key=lambda r: (r.priority, r.id or 0)):
+    matched = False
+    default: Rule | None = None
+    for rule in sorted(rules, key=lambda r: (bool(r.is_default), r.priority, r.id or 0)):
+        if rule.is_default:
+            default = rule
+            continue
         if not rule_matches(rule, email):
             continue
+        matched = True
         for action in rule.actions or []:
             planned.append((rule, action))
         if rule.stop_processing:
             break
+    if not matched and default is not None:
+        for action in default.actions or []:
+            planned.append((default, action))
     return planned
 
 
@@ -237,3 +250,81 @@ async def apply_planned_for_rule(session: Session, client: GmailClient,
 def load_enabled_rules(session: Session) -> list[Rule]:
     return list(session.scalars(
         select(Rule).where(Rule.enabled.is_(True)).order_by(Rule.priority, Rule.id)))
+
+
+def _reapply_targets(session: Session, rule: Rule) -> list[Email]:
+    """Already-classified emails this rule should act on when reapplied.
+
+    Normal rules target every email they match; the default catch-all targets
+    only emails the full pipeline leaves for it (nothing else matched).
+    """
+    emails = list(session.scalars(
+        select(Email).where(Email.status.in_(
+            [EmailStatus.classified.value, EmailStatus.actioned.value]))
+        .order_by(Email.received_at.desc())))
+    if rule.is_default:
+        enabled = load_enabled_rules(session)
+        return [e for e in emails
+                if any(r is rule for r, _a in evaluate_rules(enabled, e))]
+    return [e for e in emails if rule_matches(rule, e)]
+
+
+async def reapply_rule(session: Session, client: GmailClient | None,
+                       rule: Rule) -> dict:
+    """Re-run a single rule against the existing classified backlog.
+
+    Clears the rule's prior actions on each target email, then applies just this
+    rule's actions (respecting its dry_run flag). Per-email failures are recorded
+    and processing continues.
+    """
+    targets = _reapply_targets(session, rule)
+    label_cache: dict = {}
+    actions = rule.actions or []
+    labels = [_label_for_action(session, a) for a in actions]
+    applied = failed = 0
+    for email in targets:
+        session.execute(delete(EmailAction).where(
+            EmailAction.email_id == email.id, EmailAction.rule_id == rule.id))
+        if not actions:
+            session.commit()
+            continue
+        live_ok = True
+        exec_error: str | None = None
+        if not rule.dry_run and client is not None:
+            try:
+                await _execute_action_set(client, label_cache, session,
+                                          email.gmail_message_id, actions, labels)
+            except Exception as e:
+                live_ok = False
+                exec_error = str(e)[:500]
+                log.error("reapply_failed", email_id=email.id, rule_id=rule.id,
+                          error=str(e))
+        is_live = not rule.dry_run
+        executed = is_live and live_ok
+        now = datetime.now(UTC)
+        for action, label in zip(actions, labels, strict=True):
+            params = dict(action)
+            if label is not None:
+                params["label_name"] = label.name
+                params["text_color"] = label.text_color
+                params["background_color"] = label.background_color
+            session.add(EmailAction(
+                email_id=email.id, rule_id=rule.id,
+                action_type=action["type"], action_params=params,
+                executed=executed, dry_run=rule.dry_run,
+                executed_at=now if executed else None,
+                error=exec_error if is_live else None))
+        if executed:
+            email.dry_run = False
+            email.status = EmailStatus.actioned.value
+            applied += 1
+        elif exec_error is not None:
+            failed += 1
+        session.commit()
+
+    audit(session, "user", "rule_reapplied", {
+        "rule_id": rule.id, "matched": len(targets),
+        "applied": applied, "failed": failed})
+    session.commit()
+    return {"matched": len(targets), "applied": applied, "failed": failed,
+            "emails": len(targets)}

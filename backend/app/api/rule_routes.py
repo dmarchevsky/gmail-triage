@@ -71,7 +71,7 @@ def serialize(r: Rule, session: Session) -> dict:
         "match_min_confidence": r.match_min_confidence,
         "match_sender_pattern": r.match_sender_pattern,
         "actions": actions, "stop_processing": r.stop_processing,
-        "dry_run": r.dry_run,
+        "dry_run": r.dry_run, "is_default": r.is_default,
         "pending_planned": _pending_planned(session, r.id),
     }
 
@@ -79,7 +79,8 @@ def serialize(r: Rule, session: Session) -> dict:
 @router.get("")
 def list_rules(session: Session = Depends(get_session)) -> list[dict]:
     return [serialize(r, session) for r in
-            session.scalars(select(Rule).order_by(Rule.priority, Rule.id))]
+            session.scalars(
+                select(Rule).order_by(Rule.is_default, Rule.priority, Rule.id))]
 
 
 @router.post("", status_code=201)
@@ -112,12 +113,31 @@ class BulkTestBody(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+class DefaultRuleIn(BaseModel):
+    """Editable fields of the catch-all rule: action(s) may be empty (no-op)."""
+    enabled: bool = True
+    dry_run: bool = True
+    stop_processing: bool = True
+    actions: list[dict]
+
+    @field_validator("actions")
+    @classmethod
+    def validate_action_list(cls, v: list[dict]) -> list[dict]:
+        if not v:
+            return []
+        try:
+            return rules_engine.validate_actions(v)
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+
+
 @router.delete("/bulk")
 def bulk_delete_rules(body: BulkRuleIds,
                       session: Session = Depends(get_session)) -> dict:
     if not body.rule_ids:
         return {"deleted": 0}
-    rules = list(session.scalars(select(Rule).where(Rule.id.in_(body.rule_ids))))
+    rules = [r for r in session.scalars(select(Rule).where(Rule.id.in_(body.rule_ids)))
+             if not r.is_default]
     for rule in rules:
         audit(session, "user", "rule_deleted", {"id": rule.id, "name": rule.name})
         session.delete(rule)
@@ -142,12 +162,35 @@ def bulk_update_rules(body: BulkRuleUpdate,
     return {"updated": len(rules)}
 
 
+@router.put("/{rule_id}/default")
+def update_default_rule(rule_id: int, body: DefaultRuleIn,
+                        session: Session = Depends(get_session)) -> dict:
+    """Edit the catch-all rule: only its action(s), dry-run, enabled and flow.
+    Match gates stay fixed (it always matches when nothing else did)."""
+    rule = session.get(Rule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    if not rule.is_default:
+        raise HTTPException(status_code=400, detail="Not the default rule")
+    _validate_label_ids(session, body.actions)
+    rule.enabled = body.enabled
+    rule.dry_run = body.dry_run
+    rule.stop_processing = body.stop_processing
+    rule.actions = body.actions
+    audit(session, "user", "default_rule_updated", {"id": rule.id})
+    session.commit()
+    return serialize(rule, session)
+
+
 @router.put("/{rule_id}")
 def update_rule(rule_id: int, body: RuleIn,
                 session: Session = Depends(get_session)) -> dict:
     rule = session.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
+    if rule.is_default:
+        raise HTTPException(status_code=400,
+                            detail="Use PUT /rules/{id}/default for the default rule")
     _validate_label_ids(session, body.actions)
     for key, value in body.model_dump().items():
         setattr(rule, key, value)
@@ -161,6 +204,8 @@ def delete_rule(rule_id: int, session: Session = Depends(get_session)) -> dict:
     rule = session.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
+    if rule.is_default:
+        raise HTTPException(status_code=400, detail="The default rule cannot be deleted")
     audit(session, "user", "rule_deleted", {"id": rule.id, "name": rule.name})
     session.delete(rule)
     session.commit()
@@ -198,12 +243,17 @@ def reorder(body: ReorderBody, session: Session = Depends(get_session)) -> list[
     unknown = set(body.ordered_ids) - set(rules)
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown rule ids: {sorted(unknown)}")
-    for position, rule_id in enumerate(body.ordered_ids):
+    # The default rule is pinned last; never reorder it even if passed in.
+    position = 0
+    for rule_id in body.ordered_ids:
+        if rules[rule_id].is_default:
+            continue
         rules[rule_id].priority = (position + 1) * 10
+        position += 1
     audit(session, "user", "rules_reordered", {"order": body.ordered_ids})
     session.commit()
     return [serialize(r, session) for r in
-            sorted(rules.values(), key=lambda r: (r.priority, r.id))]
+            sorted(rules.values(), key=lambda r: (r.is_default, r.priority, r.id))]
 
 
 @router.post("/{rule_id}/apply-planned")
@@ -230,6 +280,60 @@ async def apply_planned(rule_id: int, session: Session = Depends(get_session)) -
     finally:
         await client.aclose()
     return result
+
+
+def _gmail_client(session: Session):
+    """Build a Gmail client or raise 409 — shared by the reapply endpoints."""
+    from app.services import settings_service
+    from app.services.gmail import GmailAuthError, GmailClient
+
+    client_secret = settings_service.get_setting(session, "gmail_client_secret_json")
+    if not client_secret:
+        raise HTTPException(status_code=409, detail="Gmail is not connected")
+    try:
+        return GmailClient(session, client_secret)
+    except GmailAuthError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@router.post("/{rule_id}/reapply")
+async def reapply_rule_route(rule_id: int,
+                             session: Session = Depends(get_session)) -> dict:
+    """Re-run this rule against the existing classified backlog."""
+    rule = session.get(Rule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    client = _gmail_client(session) if not rule.dry_run else None
+    try:
+        result = await rules_engine.reapply_rule(session, client, rule)
+    finally:
+        if client is not None:
+            await client.aclose()
+    return result
+
+
+@router.post("/reapply-bulk")
+async def reapply_bulk(body: BulkRuleIds,
+                       session: Session = Depends(get_session)) -> dict:
+    """Re-run each selected rule against the existing classified backlog."""
+    if not body.rule_ids:
+        return {"rules": 0, "matched": 0, "applied": 0, "failed": 0}
+    rules = list(session.scalars(
+        select(Rule).where(Rule.id.in_(body.rule_ids))
+        .order_by(Rule.is_default, Rule.priority, Rule.id)))
+    client = _gmail_client(session) if any(not r.dry_run for r in rules) else None
+    totals = {"rules": 0, "matched": 0, "applied": 0, "failed": 0}
+    try:
+        for rule in rules:
+            result = await rules_engine.reapply_rule(session, client, rule)
+            totals["rules"] += 1
+            totals["matched"] += result["matched"]
+            totals["applied"] += result["applied"]
+            totals["failed"] += result["failed"]
+    finally:
+        if client is not None:
+            await client.aclose()
+    return totals
 
 
 class TestBody(BaseModel):

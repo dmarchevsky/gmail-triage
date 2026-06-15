@@ -47,10 +47,19 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
 
     tables = Base.metadata.sorted_tables  # FK-safe order
 
+    def _seeded_col(table):
+        # Rows seeded by migrations (system labels, the default rule) exist in a
+        # freshly-migrated target already; never count or copy them.
+        for name in ("is_system", "is_default"):
+            if name in table.c:
+                return table.c[name]
+        return None
+
     def _user_row_count(conn, table) -> int:
         stmt = select(func.count()).select_from(table)
-        if "is_system" in table.c:
-            stmt = stmt.where(table.c.is_system.is_not(True))
+        seeded = _seeded_col(table)
+        if seeded is not None:
+            stmt = stmt.where(seeded.is_not(True))
         return conn.execute(stmt).scalar() or 0
 
     with target.connect() as t:
@@ -64,8 +73,9 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
     with source.connect() as s, target.begin() as t:
         for table in tables:
             rows = [dict(r) for r in s.execute(select(table)).mappings()]
-            if "is_system" in table.c:
-                rows = [r for r in rows if not r.get("is_system")]
+            seeded = _seeded_col(table)
+            if seeded is not None:
+                rows = [r for r in rows if not r.get(seeded.name)]
             if rows:
                 t.execute(insert(table), rows)
             src_count = len(rows)

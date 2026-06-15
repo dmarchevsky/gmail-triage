@@ -82,7 +82,7 @@ def test_purge_data_keeps_config_clears_watermark(auth_client, db_session, popul
     assert after["digest_runs"] == 0
     # config survives
     assert after["categories"] == 1
-    assert after["rules"] == 1
+    assert after["rules"] == 2  # the user rule + the seeded catch-all default
     assert after["digests"] == 1
     assert after["settings"] >= 2
     assert after["gmail_auth"] == 1

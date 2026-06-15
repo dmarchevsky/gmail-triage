@@ -139,6 +139,9 @@ class Rule(Base):
     stop_processing: Mapped[bool] = mapped_column(Boolean, default=True)
     # Per-rule dry-run: True records planned actions without executing.
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The single catch-all rule: always evaluated last, fires only when no other
+    # rule matched. Pinned (cannot be deleted or reordered); action-only edits.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)

@@ -94,6 +94,78 @@ class TestRuleMatching:
         assert rules_engine.evaluate_rules([rule], email_with(confidence=0.1)) == []
 
 
+class TestDefaultRule:
+    def test_default_fires_only_on_fallthrough(self):
+        gated = rule_with(id=1, priority=10, match_min_confidence=0.99,
+                          actions=[{"type": "mark_read"}])
+        default = rule_with(id=2, is_default=True, actions=[{"type": "archive"}])
+        # nothing matches the gated rule -> default fires
+        planned = rules_engine.evaluate_rules([gated, default],
+                                              email_with(confidence=0.1))
+        assert [(r.id, a["type"]) for r, a in planned] == [(2, "archive")]
+        # gated rule matches -> default suppressed
+        planned = rules_engine.evaluate_rules([gated, default],
+                                              email_with(confidence=1.0))
+        assert [(r.id, a["type"]) for r, a in planned] == [(1, "mark_read")]
+
+    def test_default_with_no_actions_is_noop(self):
+        default = rule_with(id=2, is_default=True, actions=[])
+        assert rules_engine.evaluate_rules([default], email_with(confidence=0.5)) == []
+
+    def test_default_evaluated_last_regardless_of_priority(self):
+        default = rule_with(id=1, priority=1, is_default=True,
+                            actions=[{"type": "archive"}])
+        normal = rule_with(id=2, priority=100, actions=[{"type": "mark_read"}])
+        planned = rules_engine.evaluate_rules([default, normal],
+                                              email_with(confidence=0.9))
+        assert [(r.id, a["type"]) for r, a in planned] == [(2, "mark_read")]
+
+
+def test_default_rule_seeded_and_protected(auth_client):
+    rules = auth_client.get("/api/v1/rules").json()
+    assert rules[-1]["is_default"] is True
+    default = rules[-1]
+    assert default["name"] == "Default" and default["actions"] == []
+    # cannot delete, and cannot edit through the generic endpoint
+    assert auth_client.delete(f"/api/v1/rules/{default['id']}").status_code == 400
+    assert auth_client.put(f"/api/v1/rules/{default['id']}", json={
+        "name": "x", "actions": [{"type": "mark_read"}]}).status_code == 400
+
+
+def test_default_rule_edit_action(auth_client):
+    default = auth_client.get("/api/v1/rules").json()[-1]
+    resp = auth_client.put(f"/api/v1/rules/{default['id']}/default", json={
+        "enabled": True, "dry_run": True, "stop_processing": True,
+        "actions": [{"type": "archive"}]})
+    assert resp.status_code == 200
+    assert resp.json()["actions"][0]["type"] == "archive"
+    # empty actions are accepted (reset to no-op)
+    resp = auth_client.put(f"/api/v1/rules/{default['id']}/default", json={
+        "enabled": True, "dry_run": True, "stop_processing": True, "actions": []})
+    assert resp.status_code == 200 and resp.json()["actions"] == []
+
+
+def test_reapply_dry_rule_records_actions(auth_client, db_session):
+    from app.models import EmailAction
+    rule = auth_client.post("/api/v1/rules", json={
+        "name": "R", "match_sender_pattern": "*@spam.io",
+        "actions": [{"type": "mark_read"}]}).json()
+    db_session.add(email_with(mid="e1", sender="x@spam.io", confidence=0.9))
+    db_session.add(email_with(mid="e2", sender="y@ok.io", confidence=0.9))
+    db_session.commit()
+
+    body = auth_client.post(f"/api/v1/rules/{rule['id']}/reapply").json()
+    assert body["matched"] == 1 and body["applied"] == 0  # dry -> recorded only
+    acts = db_session.query(EmailAction).filter_by(rule_id=rule["id"]).all()
+    assert len(acts) == 1
+    assert acts[0].dry_run is True and acts[0].executed is False
+
+    # reapply again is idempotent: the prior action is cleared and re-recorded
+    auth_client.post(f"/api/v1/rules/{rule['id']}/reapply")
+    db_session.expire_all()
+    assert db_session.query(EmailAction).filter_by(rule_id=rule["id"]).count() == 1
+
+
 # ── Action enum is closed ────────────────────────────────────────────────────
 
 def test_action_enum_closed_set(auth_client):
@@ -214,6 +286,25 @@ def test_live_mode_executes_label_read_archive(auth_client, db_session, pipeline
 
 
 @respx.mock
+def test_reapply_live_rule_executes_on_backlog(auth_client, db_session, pipeline):
+    rule = auth_client.post("/api/v1/rules", json={
+        "name": "live read", "match_sender_pattern": "*@brew.com",
+        "dry_run": False, "actions": [{"type": "mark_read"}]}).json()
+    email = db_session.query(Email).filter_by(gmail_message_id="m1").one()
+    email.status, email.confidence = "classified", 0.9
+    db_session.commit()
+
+    modify = respx.post(f"{GMAIL_API}/messages/m1/modify").respond(200, json={})
+    body = auth_client.post(f"/api/v1/rules/{rule['id']}/reapply").json()
+    assert body["matched"] == 1 and body["applied"] == 1
+    assert modify.call_count == 1
+    assert json.loads(modify.calls[0].request.content)["removeLabelIds"] == ["UNREAD"]
+    db_session.expire_all()
+    assert db_session.query(Email).filter_by(
+        gmail_message_id="m1").one().status == "actioned"
+
+
+@respx.mock
 def test_live_mode_trash(auth_client, db_session, pipeline):
     auth_client.post("/api/v1/rules", json={
         "name": "trash spam", "match_category_id": pipeline["category"]["id"],
@@ -273,11 +364,13 @@ def test_rules_crud_reorder_and_test(auth_client, db_session):
         "match_min_confidence": 0.5}).json()
 
     listed = auth_client.get("/api/v1/rules").json()
-    assert [r["name"] for r in listed] == ["A", "B"]
+    # The seeded catch-all default is always returned last; ignore it here.
+    assert [r["name"] for r in listed if not r["is_default"]] == ["A", "B"]
+    assert listed[-1]["is_default"] is True
 
     reordered = auth_client.post("/api/v1/rules/reorder", json={
         "ordered_ids": [r2["id"], r1["id"]]}).json()
-    assert [r["name"] for r in reordered] == ["B", "A"]
+    assert [r["name"] for r in reordered if not r["is_default"]] == ["B", "A"]
 
     db_session.add(Email(gmail_message_id="t1", sender="x@y.com", subject="s",
                          status="classified", confidence=0.9))
@@ -290,7 +383,8 @@ def test_rules_crud_reorder_and_test(auth_client, db_session):
     assert result["matched"] == 1  # only the 0.9-confidence one passes 0.5 gate
 
     assert auth_client.delete(f"/api/v1/rules/{r1['id']}").status_code == 200
-    assert len(auth_client.get("/api/v1/rules").json()) == 1
+    remaining = auth_client.get("/api/v1/rules").json()
+    assert [r["name"] for r in remaining if not r["is_default"]] == ["B"]
 
 
 # ── Per-rule dry-run: mixed mode + apply-planned ─────────────────────────────

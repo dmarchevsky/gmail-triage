@@ -43,9 +43,11 @@ def get_status(session: Session = Depends(get_session)) -> dict:
         },
         "rules_mode": {
             "live": session.scalar(select(func.count(Rule.id)).where(
-                Rule.enabled.is_(True), Rule.dry_run.is_(False))) or 0,
+                Rule.enabled.is_(True), Rule.dry_run.is_(False),
+                Rule.is_default.is_(False))) or 0,
             "dry": session.scalar(select(func.count(Rule.id)).where(
-                Rule.enabled.is_(True), Rule.dry_run.is_(True))) or 0,
+                Rule.enabled.is_(True), Rule.dry_run.is_(True),
+                Rule.is_default.is_(False))) or 0,
         },
         "classifier": {
             "running": app_state.classifier_running,

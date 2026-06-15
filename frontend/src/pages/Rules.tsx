@@ -7,7 +7,6 @@ import {
   LabelPill,
   Modal,
   actionLabel,
-  conf,
   pct,
 } from "../components";
 import { useToast } from "../toast";
@@ -276,76 +275,96 @@ function RuleEditor({
   );
 }
 
-function TestResults({ rule, onClose }: { rule: Rule; onClose: () => void }) {
-  const [result, setResult] = useState<{
-    tested: number;
-    matched: number;
-    matches: { email_id: number; subject: string; sender: string; confidence: number }[];
-  } | null>(null);
-
-  useEffect(() => {
-    post<typeof result>(`/rules/${rule.id}/test`, { limit: 50 }).then((r) => setResult(r));
-  }, [rule.id]);
-
-  return (
-    <Modal title={`Test: ${rule.name}`} onClose={onClose}>
-      {!result ? (
-        <p>Testing against recent classified emails…</p>
-      ) : (
-        <>
-          <p>
-            Matched <b>{result.matched}</b> of {result.tested} recent classified emails.
-            No actions were executed.
-          </p>
-          <ul>
-            {result.matches.map((m) => (
-              <li key={m.email_id}>
-                {m.subject} <span className="sub">({m.sender}, {conf(m.confidence)})</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </Modal>
-  );
-}
-
-interface BulkTestResult {
-  rule_id: number;
-  rule_name: string;
-  tested: number;
-  match_count: number;
-  matches: { email_id: number; subject: string; sender: string; confidence: number }[];
-}
-
-function BulkTestResultsModal({
-  results,
+function DefaultRuleEditor({
+  rule,
+  labels,
+  onSaved,
   onClose,
 }: {
-  results: BulkTestResult[];
+  rule: Rule;
+  labels: Label[];
+  onSaved: () => void;
   onClose: () => void;
 }) {
+  const toast = useToast();
+  const [actions, setActions] = useState<RuleAction[]>(rule.actions);
+  const [dryRun, setDryRun] = useState(rule.dry_run);
+  const [enabled, setEnabled] = useState(rule.enabled);
+  const [confirmLive, setConfirmLive] = useState(false);
+
+  const doSave = async () => {
+    try {
+      await put(`/rules/${rule.id}/default`, {
+        enabled,
+        dry_run: dryRun,
+        stop_processing: true,
+        actions,
+      });
+      toast.success("Default rule updated");
+      onSaved();
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const save = () => {
+    if (!dryRun && rule.dry_run && actions.length > 0) setConfirmLive(true);
+    else doSave();
+  };
+
   return (
-    <Modal title="Bulk test results" onClose={onClose} wide>
-      {results.map((r) => (
-        <div key={r.rule_id} className="settings-section">
-          <p>
-            <b>{r.rule_name}</b>: matched <b>{r.match_count}</b> of {r.tested} recent emails
-          </p>
-          {r.matches.length > 0 && (
-            <ul>
-              {r.matches.map((m) => (
-                <li key={m.email_id}>
-                  {m.subject}{" "}
-                  <span className="sub">
-                    ({m.sender}, {conf(m.confidence)})
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+    <Modal title="Edit default rule" onClose={onClose} wide>
+      <p className="sub">
+        The default rule runs last and only acts on emails no other rule matched.
+        Leave its action list empty to do nothing.
+      </p>
+      <div className="form-grid">
+        <div className="span2">
+          <p className="field-label">Default action</p>
+          <ActionBuilder actions={actions} labels={labels} onChange={setActions} />
         </div>
-      ))}
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={dryRun}
+            onChange={(e) => setDryRun(e.target.checked)}
+          />
+          Dry-run — record planned actions without executing (uncheck to go live)
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          Enabled
+        </label>
+      </div>
+      <div className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button className="primary" onClick={save}>
+          Save
+        </button>
+      </div>
+      {confirmLive && (
+        <ConfirmDialog
+          title="Switch the default rule to LIVE?"
+          danger
+          confirmLabel="Go live"
+          message={
+            <p>
+              The default action will <b>really modify your Gmail</b> for every
+              email no other rule handled.
+            </p>
+          }
+          onConfirm={() => {
+            setConfirmLive(false);
+            doSave();
+          }}
+          onCancel={() => setConfirmLive(false)}
+        />
+      )}
     </Modal>
   );
 }
@@ -371,13 +390,15 @@ export default function Rules() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [editing, setEditing] = useState<Rule | null | "new">(null);
-  const [testing, setTesting] = useState<Rule | null>(null);
+  const [editingDefault, setEditingDefault] = useState<Rule | null>(null);
   const [deleting, setDeleting] = useState<Rule | null>(null);
   const [goingLive, setGoingLive] = useState<Rule | null>(null);
   const [offerApply, setOfferApply] = useState<Rule | null>(null);
+  const [reapplying, setReapplying] = useState<Rule | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [bulkConfirm, setBulkConfirm] = useState<"delete" | "go-live" | null>(null);
-  const [bulkTestResults, setBulkTestResults] = useState<BulkTestResult[] | null>(null);
+  const [bulkConfirm, setBulkConfirm] = useState<"delete" | "go-live" | "reapply" | null>(
+    null,
+  );
 
   const applyPlanned = async (rule: Rule) => {
     try {
@@ -397,13 +418,53 @@ export default function Rules() {
 
   const setMode = async (rule: Rule, dryRun: boolean) => {
     try {
-      const updated = await put<Rule>(`/rules/${rule.id}`, ruleBody(rule, { dry_run: dryRun }));
+      const updated = rule.is_default
+        ? await put<Rule>(`/rules/${rule.id}/default`, {
+            enabled: rule.enabled,
+            dry_run: dryRun,
+            stop_processing: rule.stop_processing,
+            actions: rule.actions,
+          })
+        : await put<Rule>(`/rules/${rule.id}`, ruleBody(rule, { dry_run: dryRun }));
       toast.success(dryRun ? `"${rule.name}" back to dry-run` : `"${rule.name}" is LIVE`);
       if (!dryRun && updated.pending_planned > 0) setOfferApply(updated);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
     await load();
+  };
+
+  const reapply = async (rule: Rule) => {
+    try {
+      const r = await post<{ matched: number; applied: number; failed: number }>(
+        `/rules/${rule.id}/reapply`,
+      );
+      if (r.failed > 0)
+        toast.error(`Reapplied to ${r.matched} email(s); ${r.failed} failed`);
+      else if (rule.dry_run)
+        toast.success(`Reapplied "${rule.name}": ${r.matched} email(s) re-planned`);
+      else toast.success(`Reapplied "${rule.name}": ${r.applied} of ${r.matched} executed`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+    await load();
+  };
+
+  const doBulkReapply = async () => {
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await post<{ rules: number; matched: number; applied: number; failed: number }>(
+        "/rules/reapply-bulk",
+        { rule_ids: ids },
+      );
+      if (r.failed > 0)
+        toast.error(`Reapplied ${r.rules} rule(s); ${r.failed} action(s) failed`);
+      else toast.success(`Reapplied ${r.rules} rule(s) across ${r.matched} email(s)`);
+      clearSelection();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const load = useCallback(
@@ -416,10 +477,13 @@ export default function Rules() {
     get<Label[]>("/labels").then(setLabels);
   }, [load]);
 
+  // The default rule is pinned last and never reordered.
+  const reorderable = rules.filter((r) => !r.is_default);
+
   const move = async (index: number, delta: number) => {
     const target = index + delta;
-    if (target < 0 || target >= rules.length) return;
-    const ids = rules.map((r) => r.id);
+    if (target < 0 || target >= reorderable.length) return;
+    const ids = reorderable.map((r) => r.id);
     [ids[index], ids[target]] = [ids[target], ids[index]];
     setRules(await post<Rule[]>("/rules/reorder", { ordered_ids: ids }));
   };
@@ -427,8 +491,9 @@ export default function Rules() {
   const catName = (id: number | null) =>
     id == null ? "any" : (categories.find((c) => c.id === id)?.name ?? `#${id}`);
 
-  const allChecked = rules.length > 0 && rules.every((r) => selectedIds.has(r.id));
-  const someChecked = rules.some((r) => selectedIds.has(r.id));
+  const selectable = rules.filter((r) => !r.is_default);
+  const allChecked = selectable.length > 0 && selectable.every((r) => selectedIds.has(r.id));
+  const someChecked = selectable.some((r) => selectedIds.has(r.id));
   const selectAllRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (selectAllRef.current)
@@ -443,7 +508,7 @@ export default function Rules() {
       return next;
     });
 
-  const selectAll = () => setSelectedIds(new Set(rules.map((r) => r.id)));
+  const selectAll = () => setSelectedIds(new Set(selectable.map((r) => r.id)));
   const clearSelection = () => setSelectedIds(new Set());
 
   const doBulkUpdate = async (patch: { enabled?: boolean; dry_run?: boolean }) => {
@@ -470,19 +535,6 @@ export default function Rules() {
     }
   };
 
-  const doBulkTest = async () => {
-    const ids = Array.from(selectedIds);
-    try {
-      const r = await post<{ results: BulkTestResult[] }>("/rules/bulk-test", {
-        rule_ids: ids,
-        limit: 20,
-      });
-      setBulkTestResults(r.results);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   return (
     <div>
       <header className="page-head">
@@ -493,8 +545,9 @@ export default function Rules() {
       </header>
       <p className="sub">
         Evaluated top-down; the first matching rule's actions apply, then evaluation
-        stops unless "stop processing" is off. If no rule matches, the email is left
-        untouched.
+        stops unless "stop processing" is off. The pinned <b>Default</b> rule runs
+        last and acts only on emails no other rule matched (it does nothing until you
+        give it an action).
       </p>
 
       <BulkActionBar
@@ -508,7 +561,7 @@ export default function Rules() {
             onClick: async () => setBulkConfirm("go-live"),
           },
           { label: "Go dry-run", onClick: async () => doBulkUpdate({ dry_run: true }) },
-          { label: "Test", onClick: doBulkTest },
+          { label: "Reapply", onClick: async () => setBulkConfirm("reapply") },
           {
             label: "Delete",
             danger: true,
@@ -543,34 +596,54 @@ export default function Rules() {
           {rules.map((r, i) => (
             <tr key={r.id}>
               <td>
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(r.id)}
-                  onChange={() => toggleSelect(r.id)}
-                />
+                {!r.is_default && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(r.id)}
+                    onChange={() => toggleSelect(r.id)}
+                  />
+                )}
               </td>
               <td className="order-cell">
-                <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)}>
-                  ▲
-                </button>
-                <button
-                  className="icon-btn"
-                  disabled={i === rules.length - 1}
-                  onClick={() => move(i, 1)}
-                >
-                  ▼
-                </button>
+                {r.is_default ? (
+                  <span className="sub">last</span>
+                ) : (
+                  <>
+                    <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)}>
+                      ▲
+                    </button>
+                    <button
+                      className="icon-btn"
+                      disabled={i === reorderable.length - 1}
+                      onClick={() => move(i, 1)}
+                    >
+                      ▼
+                    </button>
+                  </>
+                )}
               </td>
               <td data-label="Name">
                 <b>{r.name}</b>
+                {r.is_default && (
+                  <>
+                    {" "}
+                    <Badge tone="info">default</Badge>
+                  </>
+                )}
               </td>
               <td data-label="Match">
-                {catName(r.match_category_id)} · ≥{pct(r.match_min_confidence)}
-                {r.match_sender_pattern && (
-                  <div className="sub">
-                    from: <code>{r.match_sender_pattern}</code>
-                    {r.match_category_id == null && " (hard rule, bypasses LLM)"}
-                  </div>
+                {r.is_default ? (
+                  <span className="sub">any — when no other rule matched</span>
+                ) : (
+                  <>
+                    {catName(r.match_category_id)} · ≥{pct(r.match_min_confidence)}
+                    {r.match_sender_pattern && (
+                      <div className="sub">
+                        from: <code>{r.match_sender_pattern}</code>
+                        {r.match_category_id == null && " (hard rule, bypasses LLM)"}
+                      </div>
+                    )}
+                  </>
                 )}
               </td>
               <td data-label="Actions">
@@ -615,11 +688,15 @@ export default function Rules() {
                 ) : (
                   <button onClick={() => setMode(r, true)}>To dry-run</button>
                 )}
-                <button onClick={() => setTesting(r)}>Test</button>
-                <button onClick={() => setEditing(r)}>Edit</button>
-                <button className="danger" onClick={() => setDeleting(r)}>
-                  Delete
+                <button onClick={() => setReapplying(r)}>Reapply</button>
+                <button onClick={() => (r.is_default ? setEditingDefault(r) : setEditing(r))}>
+                  Edit
                 </button>
+                {!r.is_default && (
+                  <button className="danger" onClick={() => setDeleting(r)}>
+                    Delete
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -644,11 +721,53 @@ export default function Rules() {
           onClose={() => setEditing(null)}
         />
       )}
-      {testing && <TestResults rule={testing} onClose={() => setTesting(null)} />}
-      {bulkTestResults && (
-        <BulkTestResultsModal
-          results={bulkTestResults}
-          onClose={() => setBulkTestResults(null)}
+      {editingDefault && (
+        <DefaultRuleEditor
+          rule={editingDefault}
+          labels={labels}
+          onSaved={load}
+          onClose={() => setEditingDefault(null)}
+        />
+      )}
+      {reapplying && (
+        <ConfirmDialog
+          title={`Reapply "${reapplying.name}" to the backlog?`}
+          danger={!reapplying.dry_run}
+          confirmLabel="Reapply"
+          message={
+            <p>
+              This re-runs the rule against every already-classified email and
+              {reapplying.dry_run
+                ? " re-records its planned actions (nothing is executed in Gmail)."
+                : " executes its actions against Gmail for each match."}{" "}
+              The rule's previous action records on those emails are replaced.
+            </p>
+          }
+          onConfirm={async () => {
+            const rule = reapplying;
+            setReapplying(null);
+            await reapply(rule);
+          }}
+          onCancel={() => setReapplying(null)}
+        />
+      )}
+      {bulkConfirm === "reapply" && (
+        <ConfirmDialog
+          title={`Reapply ${selectedIds.size} rule(s) to the backlog?`}
+          danger
+          confirmLabel="Reapply"
+          message={
+            <p>
+              Each selected rule is re-run against the already-classified emails.
+              Live rules <b>modify your Gmail</b>; dry-run rules only re-record
+              planned actions. Previous action records for these rules are replaced.
+            </p>
+          }
+          onConfirm={async () => {
+            setBulkConfirm(null);
+            await doBulkReapply();
+          }}
+          onCancel={() => setBulkConfirm(null)}
         />
       )}
       {goingLive && (
