@@ -1,25 +1,32 @@
-"""Classification pipeline (spec §4.2).
+"""Classification pipeline: per-email queue with processing state.
 
-For each pending email: cheap pre-filters (ignore list), lazy body fetch from
-Gmail, prompt built from enabled categories' criteria_md, LLM call with JSON
-schema at temperature 0 (one retry inside chat_json), persist result.
+Flow for each pending email:
+  pending → processing → classified / actioned / skipped / error
 
-Rule execution happens in M3; this module only sets classification fields.
+The queue_loop() background task processes one email at a time, newest-first.
+LLM connection failure pauses the queue (LLMUnavailable); a per-email timeout
+(LLMTimeout) marks only that email as error and continues immediately.
+The stall_checker() task resets emails stuck in processing after a timeout.
+classify_pending() remains for the synchronous /classify/run-now endpoint.
 """
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
 from app.models import Category, Email, EmailStatus
-from app.services import gmail, llm, settings_service
+from app.services import llm, settings_service
 from app.services.gmail import GmailAuthError, GmailClient, GmailNotFound
 from app.services.matchers import sender_matches
 from app.state import app_state
 
 log = get_logger(__name__)
+
+_IDLE_SLEEP = 5    # seconds between queue polls when nothing pending
+_LLM_BACKOFF = 60  # seconds to wait after LLMUnavailable before retrying
 
 CLASSIFICATION_SCHEMA_TEMPLATE = {
     "type": "object",
@@ -55,6 +62,7 @@ def build_classification_prompt(categories: list[Category], email: Email,
 
 async def fetch_body(session: Session, client: GmailClient, email: Email) -> str:
     """Body text for an email: stored copy if retained, else fetch from Gmail."""
+    from app.services import gmail
     if email.body_text is not None:
         return email.body_text
     msg = await client.get_message_full(email.gmail_message_id)
@@ -87,6 +95,10 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
         email.status = EmailStatus.error.value
         email.error = f"LLM output invalid after retry: {e}"
         return
+    except llm.LLMTimeout as e:
+        email.status = EmailStatus.error.value
+        email.error = f"LLM timed out: {e}"
+        return
 
     name = result["category"]
     category = next((c for c in categories if c.name == name), None)
@@ -103,9 +115,14 @@ async def classify_one(session: Session, client: GmailClient, email: Email,
                        categories: list[Category], rules: list,
                        settings: dict) -> Email:
     """Classify a single email (ignore list → hard rules → LLM), then run the
-    rule engine. Raises llm.LLMUnavailable; leaves status pending when there
-    is nothing to classify against."""
+    rule engine. Sets processing state before any I/O. Raises LLMUnavailable
+    on connection failure; leaves status pending when there is nothing to
+    classify against."""
     from app.services import rules as rules_engine
+
+    email.status = EmailStatus.processing.value
+    email.processing_started_at = datetime.now(UTC)
+    session.commit()
 
     if sender_matches(settings.get("ignore_senders") or [], email.sender or ""):
         email.status = EmailStatus.skipped.value
@@ -116,14 +133,15 @@ async def classify_one(session: Session, client: GmailClient, email: Email,
                  and sender_matches([r.match_sender_pattern], email.sender or "")),
                 None)
     if hard is not None:
-        # Deterministic pre-filter: bypass the LLM entirely (§4.2.1).
         email.confidence = 1.0
         email.rationale = f"hard rule: {hard.name}"
         email.classified_at = datetime.now(UTC)
         email.status = EmailStatus.classified.value
     else:
         if not categories:
-            return email  # nothing to classify against; stays pending
+            email.status = EmailStatus.pending.value  # nothing to classify against
+            session.commit()
+            return email
         try:
             await classify_email(session, client, email, categories, settings)
         except llm.LLMUnavailable:
@@ -139,8 +157,9 @@ async def classify_one(session: Session, client: GmailClient, email: Email,
 
 
 async def classify_pending(session: Session, limit: int = 50) -> dict:
-    """Classify up to `limit` pending emails, then run the rule engine on each.
-    LLM-unreachable stops the batch and leaves the remainder pending (§10.7)."""
+    """Classify up to `limit` pending emails synchronously (used by /classify/run-now).
+    Processes newest-first. LLM-unreachable stops the batch and leaves the
+    remainder pending."""
     from app.services import rules as rules_engine
 
     settings = settings_service.get_all_settings(session, redact=False)
@@ -148,7 +167,7 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
         select(Category).where(Category.enabled.is_(True)).order_by(Category.id)))
     pending = list(session.scalars(
         select(Email).where(Email.status == EmailStatus.pending.value)
-        .order_by(Email.received_at).limit(limit)))
+        .order_by(Email.created_at.desc()).limit(limit)))
     if not pending:
         return {"classified": 0, "skipped": 0, "errors": 0, "actioned": 0,
                 "pending_left": 0}
@@ -170,10 +189,13 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
                                    all_rules, settings)
             except llm.LLMUnavailable as e:
                 log.warning("llm_unreachable_batch_stopped", error=str(e))
+                email.status = EmailStatus.pending.value
+                email.processing_started_at = None
+                session.commit()
                 break
             app_state.classifier_done += 1
             if email.status == EmailStatus.pending.value:
-                continue  # no categories to classify against; skip and keep going
+                continue  # no categories to classify against
             if email.status == EmailStatus.skipped.value:
                 counts["skipped"] += 1
             elif email.status == EmailStatus.error.value:
@@ -189,3 +211,105 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
     remaining = session.scalar(
         select(Email.id).where(Email.status == EmailStatus.pending.value).limit(1))
     return {**counts, "pending_left": int(remaining is not None)}
+
+
+async def _process_next() -> bool:
+    """Pick the next pending email (newest first), classify it, return True if work done."""
+    from app.db import get_sessionmaker
+    from app.services import rules as rules_engine
+
+    session = get_sessionmaker()()
+    try:
+        email = session.scalars(
+            select(Email)
+            .where(Email.status == EmailStatus.pending.value)
+            .order_by(Email.created_at.desc())
+            .limit(1)
+        ).first()
+        if email is None:
+            return False
+
+        settings = settings_service.get_all_settings(session, redact=False)
+        client_secret = settings.get("gmail_client_secret_json")
+        if not client_secret:
+            return False  # Gmail not connected; no point processing
+
+        categories = list(session.scalars(
+            select(Category).where(Category.enabled.is_(True)).order_by(Category.id)))
+        all_rules = rules_engine.load_enabled_rules(session)
+
+        app_state.classifier_running = True
+        app_state.classifier_current_email_id = email.id
+
+        try:
+            client = GmailClient(session, client_secret)
+        except GmailAuthError:
+            email.status = EmailStatus.error.value
+            email.error = "Gmail auth expired"
+            email.processing_started_at = None
+            session.commit()
+            return True
+
+        try:
+            await classify_one(session, client, email, categories, all_rules, settings)
+        except llm.LLMUnavailable as err:
+            # Cannot reach LLM — reset this email to pending and back off
+            email.status = EmailStatus.pending.value
+            email.processing_started_at = None
+            session.commit()
+            log.warning("llm_unavailable_queue_paused", error=str(err))
+            app_state.classifier_running = False
+            app_state.classifier_current_email_id = None
+            await asyncio.sleep(_LLM_BACKOFF)
+            return True
+        finally:
+            await client.aclose()
+            app_state.classifier_current_email_id = None
+
+        return True
+    finally:
+        session.close()
+
+
+async def queue_loop() -> None:
+    """Continuous background task: picks and classifies one pending email at a time."""
+    log.info("classifier_queue_started")
+    while True:
+        try:
+            did_work = await _process_next()
+        except Exception:  # noqa: BLE001
+            log.exception("classifier_queue_unhandled_error")
+            await asyncio.sleep(5)
+            continue
+        if not did_work:
+            app_state.classifier_running = False
+            await asyncio.sleep(_IDLE_SLEEP)
+
+
+async def stall_checker() -> None:
+    """Periodic task: reset emails stuck in processing back to pending."""
+    log.info("stall_checker_started")
+    while True:
+        await asyncio.sleep(60)
+        from app.db import get_sessionmaker
+        session = get_sessionmaker()()
+        try:
+            settings = settings_service.get_all_settings(session, redact=False)
+            timeout = float(settings.get("llm_classify_timeout_seconds") or 120) + 30
+            cutoff = datetime.now(UTC) - timedelta(seconds=timeout)
+            stalled = list(session.scalars(
+                select(Email).where(
+                    Email.status == EmailStatus.processing.value,
+                    Email.processing_started_at < cutoff,
+                )
+            ))
+            for e in stalled:
+                e.status = EmailStatus.pending.value
+                e.processing_started_at = None
+                log.warning("stalled_email_reset", email_id=e.id)
+            if stalled:
+                session.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("stall_checker_error")
+        finally:
+            session.close()

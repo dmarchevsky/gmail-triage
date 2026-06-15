@@ -15,6 +15,7 @@ class AppState:
     classifier_running: bool = False
     classifier_done: int = 0
     classifier_total: int = 0
+    classifier_current_email_id: int | None = None
 
 
 app_state = AppState()

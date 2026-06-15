@@ -31,7 +31,11 @@ class LLMError(Exception):
 
 
 class LLMUnavailable(LLMError):
-    """Endpoint unreachable/timeout — callers should leave work queued."""
+    """Cannot connect to LLM endpoint — callers should leave work queued."""
+
+
+class LLMTimeout(LLMError):
+    """Request timed out after a successful connection — per-email error, not a global outage."""
 
 
 class LLMInvalidOutput(LLMError):
@@ -115,7 +119,9 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
                 messages.append({"role": "user", "content":
                                  "That was not valid JSON matching the schema. "
                                  "Respond ONLY with the JSON object."})
-    except (APIConnectionError, APITimeoutError) as e:
+    except APITimeoutError as e:
+        raise LLMTimeout(str(e)) from e
+    except APIConnectionError as e:
         app_state.llm_status = "unreachable"
         raise LLMUnavailable(str(e)) from e
     finally:
@@ -137,7 +143,9 @@ async def chat_text(system: str, user: str, timeout: float,
                           {"role": "user", "content": user}])
         app_state.llm_status = "ok"
         return (completion.choices[0].message.content or "").strip()
-    except (APIConnectionError, APITimeoutError) as e:
+    except APITimeoutError as e:
+        raise LLMTimeout(str(e)) from e
+    except APIConnectionError as e:
         app_state.llm_status = "unreachable"
         raise LLMUnavailable(str(e)) from e
     except APIStatusError as e:

@@ -3,8 +3,9 @@ import { Category, EmailList, EmailRow, StatusResponse, get, post } from "../api
 import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
-function statusTone(status: string): "ok" | "warn" | "error" | "neutral" {
+function statusTone(status: string): "ok" | "warn" | "error" | "neutral" | "info" {
   if (status === "actioned" || status === "classified") return "ok";
+  if (status === "processing") return "info";
   if (status === "error") return "error";
   if (status === "pending") return "warn";
   return "neutral";
@@ -91,6 +92,22 @@ function EmailDetail({
     get<EmailRow>(`/emails/${emailId}`).then(setEmail);
   }, [emailId]);
 
+  // Auto-refresh while the email is being processed by the queue
+  useEffect(() => {
+    if (!email) return;
+    if (email.status !== "pending" && email.status !== "processing") return;
+    const id = setInterval(async () => {
+      try {
+        const updated = await get<EmailRow>(`/emails/${emailId}`);
+        setEmail(updated);
+        if (updated.status !== "pending" && updated.status !== "processing") {
+          onChanged();
+        }
+      } catch { /* transient */ }
+    }, 4000);
+    return () => clearInterval(id);
+  }, [emailId, email?.status, onChanged]);
+
   if (!email) return null;
   return (
     <Modal title={email.subject || "(no subject)"} onClose={onClose} wide>
@@ -156,7 +173,7 @@ function EmailDetail({
             try {
               const updated = await post<EmailRow>(`/emails/${email.id}/reclassify`);
               setEmail(updated);
-              toast.success(reclassifySummary(updated));
+              toast.success("Queued for reclassification — watch for status updates");
               onChanged();
             } catch (e) {
               toast.error(e instanceof Error ? e.message : String(e));
@@ -223,7 +240,7 @@ export default function Emails() {
     const tick = async () => {
       try {
         const st = await get<StatusResponse>("/status");
-        const running = st.classifier.running;
+        const running = st.classifier.running || st.classifier.pending_emails > 0;
         setClassifying(running);
         if (running || wasRunning.current) await load();
         wasRunning.current = running;

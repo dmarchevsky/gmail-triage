@@ -33,18 +33,10 @@ log = get_logger(__name__)
 
 # Created inside poller_loop (must be bound to the running event loop).
 _wake_event: asyncio.Event | None = None
-_classify_hook = None  # M2 wires the classification pipeline in here
-
-
 def wake() -> None:
     """Interrupt the sleep between poll cycles (e.g. after un-pausing)."""
     if _wake_event is not None:
         _wake_event.set()
-
-
-def set_classify_hook(hook) -> None:
-    global _classify_hook
-    _classify_hook = hook
 
 
 # Never ingest these regardless of scope (Sent/Drafts/Spam/Trash/Chats).
@@ -189,8 +181,6 @@ async def poll_once(session: Session) -> dict:
         audit(session, "system", "poll_completed", {"mode": mode, "new_emails": new_count})
         session.commit()
 
-    if _classify_hook is not None and new_count:
-        await _classify_hook(session)
     return {"mode": mode, "new_emails": new_count}
 
 

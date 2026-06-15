@@ -146,6 +146,7 @@ class Rule(Base):
 
 class EmailStatus(StrEnum):
     pending = "pending"
+    processing = "processing"
     classified = "classified"
     actioned = "actioned"
     skipped = "skipped"
@@ -177,6 +178,7 @@ class Email(Base):
     status: Mapped[str] = mapped_column(String(16), default=EmailStatus.pending.value, index=True)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
     error: Mapped[str | None] = mapped_column(Text)
+    processing_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     classification: Mapped[Category | None] = relationship()

@@ -256,22 +256,26 @@ def test_reclassify_single_email(auth_client, db_session, seeded):
     assert email.rationale == "v1"
     assert db_session.query(EmailAction).count() == 1  # stale dry-run plan
 
+    # Reclassify returns pending immediately (queue handles re-classification).
     resp = auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
     assert resp.status_code == 200
     detail = resp.json()
-    assert detail["classification"] == "Receipts"
-    assert detail["rationale"] == "v2"
+    assert detail["status"] == "pending"
+    assert detail["classification"] is None
+    assert db_session.query(EmailAction).count() == 0  # all actions cleared
 
+    # run-now drives the classification synchronously in tests.
+    auth_client.post("/api/v1/classify/run-now")
     db_session.expire_all()
     email = db_session.query(Email).one()
+    assert email.rationale == "v2"
     assert email.confidence == 0.7
-    # Old unexecuted dry-run plan replaced; rule no longer matches Receipts.
-    assert db_session.query(EmailAction).count() == 0
     assert email.status == "classified"
 
 
 @respx.mock
-def test_reclassify_keeps_executed_action_history(auth_client, db_session, seeded):
+def test_reclassify_clears_all_actions(auth_client, db_session, seeded):
+    """Reclassify wipes ALL previous actions (executed and planned alike)."""
     from datetime import UTC, datetime
 
     from app.models import Email, EmailAction
@@ -281,28 +285,53 @@ def test_reclassify_keeps_executed_action_history(auth_client, db_session, seede
                                executed_at=datetime.now(UTC)))
     db_session.commit()
 
-    mock_gmail_full(seeded)
-    respx.post(CHAT_URL).mock(return_value=llm_response(
-        {"category": "none", "confidence": 0.5, "rationale": "r"}))
-    auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
-
+    resp = auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
+    assert resp.status_code == 200
     db_session.expire_all()
-    kept = db_session.query(EmailAction).all()
-    assert len(kept) == 1 and kept[0].executed  # history preserved
+    assert db_session.query(EmailAction).count() == 0  # all cleared
 
 
 @respx.mock
-def test_reclassify_llm_down_503(auth_client, db_session, seeded):
+def test_reclassify_llm_down_leaves_pending(auth_client, db_session, seeded):
+    """Reclassify returns 200 pending; run-now with LLM down leaves it pending."""
     import httpx
 
-    mock_gmail_full(seeded)
-    respx.post(CHAT_URL).mock(side_effect=httpx.ConnectError("refused"))
     from app.models import Email
     email = db_session.query(Email).one()
     resp = auth_client.post(f"/api/v1/emails/{email.id}/reclassify")
-    assert resp.status_code == 503
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending"
+
+    # LLM is unreachable — run-now should leave the email pending (not error).
+    mock_gmail_full(seeded)
+    respx.post(CHAT_URL).mock(side_effect=httpx.ConnectError("refused"))
+    auth_client.post("/api/v1/classify/run-now")
     db_session.expire_all()
     assert db_session.query(Email).one().status == "pending"
+
+
+@respx.mock
+def test_llm_timeout_not_unavailable(auth_client, db_session, seeded):
+    """APITimeoutError marks the email as error but does NOT set LLM unreachable."""
+    import httpx
+
+    from app.models import Email
+    from app.state import app_state
+
+    app_state.llm_status = "unknown"  # isolate from other tests that set unreachable
+
+    mock_gmail_full(seeded)
+    respx.post(CHAT_URL).mock(side_effect=httpx.ReadTimeout("timed out"))
+    resp = auth_client.post("/api/v1/classify/run-now")
+    assert resp.status_code == 200
+
+    db_session.expire_all()
+    email = db_session.query(Email).one()
+    assert email.status == "error"
+    assert "timed out" in (email.error or "").lower()
+
+    # LLM should NOT be marked unreachable after a timeout.
+    assert app_state.llm_status != "unreachable"
 
 
 def test_reclassify_unknown_email_404(auth_client, connected):

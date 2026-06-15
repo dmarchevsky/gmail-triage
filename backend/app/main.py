@@ -32,7 +32,7 @@ from app.logging_setup import get_logger, setup_logging
 from app.models import GmailAuth
 from app.services import classifier, digest_scheduler, llm, settings_service
 from app.services.gmail import assert_scopes_safe
-from app.services.poller import poller_loop, set_classify_hook
+from app.services.poller import poller_loop
 
 log = get_logger(__name__)
 
@@ -55,7 +55,6 @@ async def lifespan(app: FastAPI):
     cfg.validate_secrets()
     run_migrations()
     assert_stored_scopes_safe()
-    set_classify_hook(classifier.classify_pending)
     session = get_sessionmaker()()
     try:
         await llm.health_probe(settings_service.get_all_settings(session, redact=False),
@@ -63,13 +62,17 @@ async def lifespan(app: FastAPI):
     finally:
         session.close()
     poller_task = asyncio.create_task(poller_loop())
+    queue_task = asyncio.create_task(classifier.queue_loop())
+    stall_task = asyncio.create_task(classifier.stall_checker())
     digest_scheduler.start()
     log.info("startup_complete", db=cfg.sqlalchemy_url)
     yield
     digest_scheduler.shutdown()
-    poller_task.cancel()
+    for task in (poller_task, queue_task, stall_task):
+        task.cancel()
     with suppress(asyncio.CancelledError):
-        await poller_task
+        await asyncio.gather(poller_task, queue_task, stall_task,
+                             return_exceptions=True)
     log.info("shutdown")
 
 

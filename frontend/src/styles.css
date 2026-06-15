@@ -303,6 +303,11 @@ code {
   color: #991b1b;
 }
 
+.badge.info {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
 .badge.dry {
   background: #fde68a;
   color: #78350f;
