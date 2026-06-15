@@ -9,8 +9,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_session, get_sessionmaker
-from app.state import app_state
 from app.models import AuditLog, Category, Email, EmailAction, Feedback
+from app.state import app_state
 
 router = APIRouter()
 
