@@ -11,14 +11,6 @@ function statusTone(status: string): "ok" | "warn" | "error" | "neutral" | "info
   return "neutral";
 }
 
-function reclassifySummary(email: EmailRow): string {
-  const category = email.classification ?? "none";
-  if (email.actions.length === 0)
-    return `Re-classified as ${category} — no rule matched`;
-  const planned = email.actions.some((a) => a.dry_run && !a.executed);
-  const labels = email.actions.map((a) => actionLabel(a.action_type)).join(", ");
-  return `Re-classified as ${category} — ${planned ? "planned" : "executed"}: ${labels}`;
-}
 
 function FeedbackForm({
   email,
