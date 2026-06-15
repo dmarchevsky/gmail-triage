@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 from app.config import get_config
@@ -131,16 +132,25 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
 
 async def chat_text(system: str, user: str, timeout: float,
                     settings: dict[str, Any] | None = None,
-                    max_concurrency: int = 1) -> str:
-    """Plain-text chat completion (digest summaries)."""
+                    max_concurrency: int = 1,
+                    max_tokens: int | None = None) -> str:
+    """Plain-text chat completion (digest summaries).
+
+    `max_tokens` bounds generation so a verbose local model can't run a single
+    call for minutes — essential when the per-call timeout is large.
+    """
     base_url, model = resolve_llm_target(settings)
     client = _client(base_url, timeout)
+    kwargs: dict[str, Any] = {}
+    if max_tokens is not None and max_tokens > 0:
+        kwargs["max_tokens"] = max_tokens
     try:
         async with _get_semaphore(max_concurrency):
             completion = await client.chat.completions.create(
                 model=model, temperature=0,
                 messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": user}])
+                          {"role": "user", "content": user}],
+                **kwargs)
         app_state.llm_status = "ok"
         return (completion.choices[0].message.content or "").strip()
     except APITimeoutError as e:
@@ -206,3 +216,33 @@ async def health_probe(settings: dict[str, Any] | None = None,
         return {"ok": False, "base_url": base_url, "error": str(e)[:300]}
     finally:
         await client.close()
+
+
+async def fetch_context_length(settings: dict[str, Any] | None = None,
+                               timeout: float = 5) -> int | None:
+    """Detected context window (n_ctx) from the llama.cpp `/props` endpoint.
+
+    `/props` lives at the server root, not under `/v1`, so the trailing `/v1`
+    is stripped. Returns None for non-llama.cpp servers or any failure — the
+    manual `llm_max_context_tokens` setting stays authoritative in that case.
+    """
+    base_url, _ = resolve_llm_target(settings)
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"{root}/props")
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:  # noqa: BLE001 — best-effort probe; never raises to caller
+        log.info("llm_props_probe_failed", error=str(e)[:200])
+        return None
+    n_ctx = data.get("n_ctx")
+    if n_ctx is None:
+        gen = data.get("default_generation_settings") or {}
+        n_ctx = gen.get("n_ctx")
+    try:
+        return int(n_ctx) if n_ctx else None
+    except (TypeError, ValueError):
+        return None

@@ -23,6 +23,7 @@ interface DigestForm {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
+  depth: number;
 }
 
 function DigestEditor({
@@ -50,6 +51,7 @@ function DigestEditor({
     include_metadata: digest?.include_metadata ?? true,
     max_emails: digest?.max_emails ?? 50,
     send_no_news: digest?.send_no_news ?? false,
+    depth: digest?.depth ?? 2,
   });
   const toggleCategory = (id: number) =>
     setForm({
@@ -140,6 +142,17 @@ function DigestEditor({
             onChange={(e) => setForm({ ...form, max_emails: Number(e.target.value) })}
           />
         </label>
+        <label>
+          Depth
+          <select
+            value={form.depth}
+            onChange={(e) => setForm({ ...form, depth: Number(e.target.value) })}
+          >
+            <option value={1}>Brief — snippets only, fastest</option>
+            <option value={2}>Standard — full bodies (default)</option>
+            <option value={3}>Detailed — longer, more specifics</option>
+          </select>
+        </label>
         <label className="checkbox">
           <input
             type="checkbox"
@@ -223,7 +236,20 @@ export default function Digests() {
   useEffect(() => {
     load();
     get<Category[]>("/categories").then(setCategories);
+    const id = setInterval(load, 10000); // keep run status live
+    return () => clearInterval(id);
   }, [load]);
+
+  const runTone = (s: string) =>
+    s === "running"
+      ? "info"
+      : s === "success"
+        ? "ok"
+        : s === "error"
+          ? "error"
+          : s === "dry_run"
+            ? "dry"
+            : "neutral";
 
   const catNames = (ids: number[]) =>
     ids.map((id) => categories.find((c) => c.id === id)?.name ?? `#${id}`).join(", ");
@@ -329,6 +355,7 @@ export default function Digests() {
             <th>Categories</th>
             <th>Min conf.</th>
             <th>Enabled</th>
+            <th>Status</th>
             <th></th>
           </tr>
         </thead>
@@ -351,30 +378,45 @@ export default function Digests() {
               <td data-label="Categories">{catNames(d.category_ids) || "—"}</td>
               <td data-label="Min conf.">{pct(d.min_confidence)}</td>
               <td data-label="Enabled">{d.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Status">
+                {d.last_run ? (
+                  <Badge tone={runTone(d.last_run.status)}>{d.last_run.status}</Badge>
+                ) : (
+                  <span className="sub">—</span>
+                )}
+              </td>
               <td className="row-actions">
                 <AsyncButton
+                  disabled={d.last_run?.status === "running"}
                   onClick={async () => {
                     const r = await post<DigestRun>(`/digests/${d.id}/run-now`, {
                       preview: true,
                     });
+                    load();
                     toast.success(
-                      r.status === "empty"
-                        ? "No eligible emails."
-                        : `Preview rendered (${r.email_ids.length} emails) — see Runs`,
+                      r.status === "running"
+                        ? "Already running — see Runs"
+                        : r.status === "empty"
+                          ? "No eligible emails."
+                          : `Preview rendered (${r.email_ids.length} emails) — see Runs`,
                     );
                   }}
                 >
                   Preview
                 </AsyncButton>
                 <AsyncButton
+                  disabled={d.last_run?.status === "running"}
                   onClick={async () => {
                     const r = await post<DigestRun>(`/digests/${d.id}/run-now`, {});
+                    load();
                     const message =
-                      r.status === "empty"
-                        ? "No eligible emails."
-                        : r.status === "success"
-                          ? `Sent (${r.email_ids.length} emails)`
-                          : `Run ${r.status}: ${r.error ?? ""}`;
+                      r.status === "running"
+                        ? "Already running — see Runs"
+                        : r.status === "empty"
+                          ? "No eligible emails."
+                          : r.status === "success"
+                            ? `Sent (${r.email_ids.length} emails)`
+                            : `Run ${r.status}: ${r.error ?? ""}`;
                     if (r.status === "error") toast.error(message);
                     else toast.success(message);
                   }}
@@ -391,7 +433,7 @@ export default function Digests() {
           ))}
           {digests.length === 0 && (
             <tr>
-              <td colSpan={7} className="sub">
+              <td colSpan={8} className="sub">
                 No digests. Example: "Market news — 07:00 &amp; 16:00 — category MarketNews
                 — min confidence 0.8."
               </td>

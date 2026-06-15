@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_session
-from app.models import AuditLog, Category, Email, EmailAction, Feedback
+from app.models import AuditLog, Category, Email, EmailAction, Feedback, Rule
 
 router = APIRouter()
 
@@ -276,24 +276,30 @@ def stats(session: Session = Depends(get_session)) -> dict:
         return {"processed": processed or 0, "actions_executed": actioned,
                 "actions_planned_dry_run": planned}
 
-    by_category = [
-        {"category": name, "count": count}
-        for name, count in session.execute(
-            select(Category.name, func.count(Email.id))
-            .join(Email, Email.classification_id == Category.id)
-            .where(Email.created_at >= week)
-            .group_by(Category.name).order_by(func.count(Email.id).desc()))
-    ]
-    unclassified = session.scalar(select(func.count(Email.id)).where(
-        Email.created_at >= week, Email.classification_id.is_(None),
-        Email.status.in_(["classified", "actioned"]))) or 0
-    if unclassified:
-        by_category.append({"category": "none", "count": unclassified})
-
     recent = [{
         "ts": r.ts.isoformat() if r.ts else None,
-        "actor": r.actor, "event_type": r.event_type, "payload": r.payload,
+        "actor": r.actor, "event_type": r.event_type, "payload": dict(r.payload or {}),
     } for r in session.scalars(select(AuditLog).order_by(AuditLog.ts.desc()).limit(20))]
+
+    # Activity payloads store only ids; resolve them to human references
+    # (email from/subject, rule name) so the dashboard feed reads as prose.
+    email_ids = {p["payload"]["email_id"] for p in recent if "email_id" in p["payload"]}
+    rule_ids = {p["payload"]["rule_id"] for p in recent if "rule_id" in p["payload"]}
+    rule_ids |= {p["payload"]["id"] for p in recent
+                 if p["event_type"] == "rule_updated" and "id" in p["payload"]}
+    emails = {row.id: row for row in session.execute(
+        select(Email.id, Email.sender, Email.subject)
+        .where(Email.id.in_(email_ids)))} if email_ids else {}
+    rules = {rid: name for rid, name in session.execute(
+        select(Rule.id, Rule.name).where(Rule.id.in_(rule_ids)))} if rule_ids else {}
+    for item in recent:
+        p, event_type = item["payload"], item["event_type"]
+        email = emails.get(p.get("email_id"))
+        if email is not None:
+            p["email_from"], p["email_subject"] = email.sender, email.subject
+        rule_id = p.get("rule_id") or (p.get("id") if event_type == "rule_updated" else None)
+        if rule_id in rules:
+            p["rule_name"] = rules[rule_id]
 
     # Per-category precision from feedback: an email classified as C and
     # flagged with a different correct category counts against C. LLM
@@ -301,27 +307,33 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # should tune rule thresholds against (spec §4.2 note).
     precision = []
     for category in session.scalars(select(Category).order_by(Category.id)):
-        classified_total = session.scalar(select(func.count(Email.id)).where(
+        classified_1d = session.scalar(select(func.count(Email.id)).where(
             Email.classification_id == category.id,
-            Email.status.in_(["classified", "actioned"]))) or 0
-        flagged_wrong = session.scalar(
+            Email.status.in_(["classified", "actioned"]),
+            Email.created_at >= today)) or 0
+        classified_7d = session.scalar(select(func.count(Email.id)).where(
+            Email.classification_id == category.id,
+            Email.status.in_(["classified", "actioned"]),
+            Email.created_at >= week)) or 0
+        flagged_wrong_7d = session.scalar(
             select(func.count(Feedback.id))
             .join(Email, Email.id == Feedback.email_id)
             .where(Email.classification_id == category.id,
+                   Email.created_at >= week,
                    (Feedback.correct_category_id.is_(None))
                    | (Feedback.correct_category_id != category.id))) or 0
         precision.append({
             "category_id": category.id,
             "category": category.name,
-            "classified_total": classified_total,
-            "flagged_wrong": flagged_wrong,
-            "precision": (round(1 - flagged_wrong / classified_total, 3)
-                          if classified_total else None),
+            "classified_1d": classified_1d,
+            "classified_7d": classified_7d,
+            "flagged_wrong_7d": flagged_wrong_7d,
+            "precision_7d": (round(1 - flagged_wrong_7d / classified_7d, 3)
+                             if classified_7d else None),
         })
 
     return {"today": window(today), "week": window(week),
-            "by_category": by_category, "recent_activity": recent,
-            "category_precision": precision}
+            "recent_activity": recent, "category_precision": precision}
 
 
 @router.get("/audit-log")

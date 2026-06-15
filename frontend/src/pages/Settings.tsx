@@ -318,10 +318,14 @@ export default function SettingsPage() {
   const [telegramToken, setTelegramToken] = useState("");
   const [confirmingPurge, setConfirmingPurge] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [detectedContext, setDetectedContext] = useState<number | null>(null);
 
   const load = () => get<Settings>("/settings").then(setSettings);
   useEffect(() => {
     load();
+    get<{ detected: number | null }>("/llm/context")
+      .then((r) => setDetectedContext(r.detected))
+      .catch(() => setDetectedContext(null));
   }, []);
 
   if (!settings) return <p>Loading…</p>;
@@ -351,6 +355,14 @@ export default function SettingsPage() {
     ["llm_classify_timeout_seconds", "LLM classify timeout (s)", "120"],
     ["llm_digest_timeout_seconds", "LLM digest timeout (s)", "300"],
     ["llm_max_concurrency", "LLM max in-flight requests", "1"],
+    [
+      "llm_max_context_tokens",
+      detectedContext
+        ? `LLM max context (tokens; 0 = auto, detected ${detectedContext})`
+        : "LLM max context (tokens; 0 = auto)",
+      "0",
+    ],
+    ["digest_micro_batch_size", "Digest emails per summary call", "5"],
   ];
 
   return (

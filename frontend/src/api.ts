@@ -152,14 +152,14 @@ export interface EmailList {
 export interface Stats {
   today: { processed: number; actions_executed: number; actions_planned_dry_run: number };
   week: { processed: number; actions_executed: number; actions_planned_dry_run: number };
-  by_category: { category: string; count: number }[];
   recent_activity: { ts: string | null; actor: string; event_type: string; payload: unknown }[];
   category_precision: {
     category_id: number;
     category: string;
-    classified_total: number;
-    flagged_wrong: number;
-    precision: number | null;
+    classified_1d: number;
+    classified_7d: number;
+    flagged_wrong_7d: number;
+    precision_7d: number | null;
   }[];
 }
 
@@ -174,6 +174,8 @@ export interface Settings {
   llm_classify_timeout_seconds: number;
   llm_digest_timeout_seconds: number;
   llm_max_concurrency: number;
+  llm_max_context_tokens: number;
+  digest_micro_batch_size: number;
   telegram_bot_token_configured: boolean;
   telegram_default_chat_id: string;
   gmail_client_secret_json_configured: boolean;
@@ -192,6 +194,12 @@ export interface GmailLabel {
   type: string;
 }
 
+export interface DigestLastRun {
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface Digest {
   id: number;
   name: string;
@@ -205,6 +213,14 @@ export interface Digest {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
+  depth: number;
+  last_run: DigestLastRun | null;
+}
+
+export interface LlmQueue {
+  pending: number;
+  processing: { id: number; sender: string | null; subject: string | null }[];
+  digests: { run_id: number; digest_id: number; name: string; started_at: string | null }[];
 }
 
 export interface DigestRun {

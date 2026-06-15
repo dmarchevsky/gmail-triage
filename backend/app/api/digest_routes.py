@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
@@ -27,6 +27,7 @@ class DigestIn(BaseModel):
     include_metadata: bool = True
     max_emails: int = Field(default=50, ge=1, le=500)
     send_no_news: bool = False
+    depth: int = Field(default=2, ge=1, le=3)  # 1 brief · 2 standard · 3 detailed
 
     @field_validator("cron_times")
     @classmethod
@@ -36,7 +37,7 @@ class DigestIn(BaseModel):
         return v
 
 
-def serialize(d: Digest) -> dict:
+def serialize(d: Digest, last_run: dict | None = None) -> dict:
     return {
         "id": d.id, "name": d.name, "enabled": d.enabled,
         "category_ids": d.category_ids, "cron_times": d.cron_times,
@@ -45,6 +46,31 @@ def serialize(d: Digest) -> dict:
         "telegram_chat_id": d.telegram_chat_id,
         "include_links": d.include_links, "include_metadata": d.include_metadata,
         "max_emails": d.max_emails, "send_no_news": d.send_no_news,
+        "depth": d.depth, "last_run": last_run,
+    }
+
+
+def _latest_runs(session: Session) -> dict[int, dict]:
+    """Most recent run per digest in one windowed query (no N+1)."""
+    rn = func.row_number().over(
+        partition_by=DigestRun.digest_id,
+        order_by=DigestRun.started_at.desc(),
+    ).label("rn")
+    sub = select(
+        DigestRun.digest_id, DigestRun.status,
+        DigestRun.started_at, DigestRun.finished_at, rn,
+    ).subquery()
+    rows = session.execute(
+        select(sub.c.digest_id, sub.c.status, sub.c.started_at, sub.c.finished_at)
+        .where(sub.c.rn == 1)
+    ).all()
+    return {
+        r.digest_id: {
+            "status": r.status,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        }
+        for r in rows
     }
 
 
@@ -67,7 +93,9 @@ def _check_categories(session: Session, ids: list[int]) -> None:
 
 @router.get("")
 def list_digests(session: Session = Depends(get_session)) -> list[dict]:
-    return [serialize(d) for d in session.scalars(select(Digest).order_by(Digest.id))]
+    last_runs = _latest_runs(session)
+    return [serialize(d, last_runs.get(d.id))
+            for d in session.scalars(select(Digest).order_by(Digest.id))]
 
 
 @router.post("", status_code=201)

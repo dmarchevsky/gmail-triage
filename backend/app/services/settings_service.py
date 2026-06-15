@@ -29,6 +29,12 @@ DEFAULTS: dict[str, Any] = {
     "llm_classify_timeout_seconds": 120,
     "llm_digest_timeout_seconds": 300,
     "llm_max_concurrency": 1,
+    # Model context window in tokens. 0 = auto/unknown (no output cap derived
+    # from it); detected from the llama.cpp /props endpoint and shown in the UI,
+    # but the stored value here is authoritative once set.
+    "llm_max_context_tokens": 0,
+    # Emails summarized per micro-summary LLM call (batched to cut round-trips).
+    "digest_micro_batch_size": 5,
     # Max classification attempts before an email is left terminally in `error`
     # (the recovery loop retries `error`/stalled emails up to this many times).
     "classify_max_attempts": 5,

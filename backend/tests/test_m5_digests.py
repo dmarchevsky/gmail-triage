@@ -8,7 +8,7 @@ import pytest
 import respx
 from httpx import Response
 
-from app.models import Category, Digest, Email
+from app.models import Category, Digest, DigestRun, DigestRunStatus, Email, EmailStatus
 from app.services import telegram
 from app.services.digest_scheduler import build_triggers, parse_hhmm
 from tests.test_m2_classification import CHAT_URL, llm_response
@@ -130,9 +130,20 @@ def test_digest_crud_validation(auth_client, digest_setup):
     assert len(listed) == 1 and listed[0]["name"] == "Market news"
 
 
+def _batched_llm():
+    """Numbered list for the batched micro-summary call, plain text for the
+    synthesis call (distinguished by the synthesis user prompt)."""
+    def handler(request):
+        body = request.content.decode()
+        if "Produce the digest now" in body:
+            return llm_response("Summary text.")
+        return llm_response("[1] Micro one.\n[2] Micro two.")
+    return respx.post(CHAT_URL).mock(side_effect=handler)
+
+
 @respx.mock
 def test_preview_renders_without_sending(auth_client, db_session, digest_setup):
-    chat = mock_llm_text()
+    chat = _batched_llm()
     tg = respx.post(TG_SEND)
     d = digest_setup["digest"]
 
@@ -142,7 +153,7 @@ def test_preview_renders_without_sending(auth_client, db_session, digest_setup):
     assert sorted(run["email_ids"]) == sorted([digest_setup["e2"], digest_setup["e1"]])
     assert run["summary_text"] == "Summary text."
     assert tg.call_count == 0                       # nothing sent in preview
-    assert chat.call_count == 3                     # 2 micro + 1 synthesis
+    assert chat.call_count == 2                     # 1 batched micro + 1 synthesis
 
     # Preview must NOT consume eligibility: preview again, same emails eligible.
     run2 = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
@@ -223,6 +234,89 @@ def test_max_emails_cap_newest_first(auth_client, db_session, digest_setup):
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
                            json={"preview": True}).json()
     assert run["email_ids"] == [digest_setup["e2"]]  # newest of the two
+
+
+@respx.mock
+def test_preview_blocked_while_running(auth_client, db_session, digest_setup):
+    """A fresh `running` row (preview or real) blocks a new run of either kind."""
+    chat = mock_llm_text()
+    d = digest_setup["digest"]
+    existing = DigestRun(digest_id=d["id"], status=DigestRunStatus.running.value,
+                         started_at=datetime.now(UTC))
+    db_session.add(existing)
+    db_session.commit()
+
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
+                           json={"preview": True}).json()
+    assert run["id"] == existing.id            # returned the in-flight run
+    assert run["status"] == "running"
+    assert chat.call_count == 0                 # guard short-circuited; no LLM
+
+
+def test_list_digests_includes_last_run_and_depth(auth_client, db_session, digest_setup):
+    d = digest_setup["digest"]
+    db_session.add(DigestRun(digest_id=d["id"], status=DigestRunStatus.success.value,
+                             started_at=datetime.now(UTC)))
+    db_session.commit()
+    listed = auth_client.get("/api/v1/digests").json()
+    row = next(x for x in listed if x["id"] == d["id"])
+    assert row["depth"] == 2                    # default standard
+    assert row["last_run"]["status"] == "success"
+
+
+def test_depth_roundtrips(auth_client, digest_setup):
+    d = digest_setup["digest"]
+    auth_client.put(f"/api/v1/digests/{d['id']}", json={
+        "name": d["name"], "category_ids": d["category_ids"],
+        "cron_times": d["cron_times"], "timezone": d["timezone"],
+        "min_confidence": 0.8, "depth": 1})
+    row = auth_client.get("/api/v1/digests").json()[0]
+    assert row["depth"] == 1
+    bad = auth_client.post("/api/v1/digests", json={"name": "x", "depth": 9})
+    assert bad.status_code == 422
+
+
+def test_llm_queue_reports_running_work(auth_client, db_session, digest_setup):
+    d = digest_setup["digest"]
+    db_session.add(DigestRun(digest_id=d["id"], status=DigestRunStatus.running.value,
+                             started_at=datetime.now(UTC)))
+    db_session.add(Email(gmail_message_id="proc1", sender="p@x.com", subject="in flight",
+                         status=EmailStatus.processing.value,
+                         processing_started_at=datetime.now(UTC)))
+    db_session.commit()
+    q = auth_client.get("/api/v1/llm/queue").json()
+    assert any(x["name"] == "Market news" for x in q["digests"])
+    assert any(x["subject"] == "in flight" for x in q["processing"])
+
+
+@respx.mock
+def test_batch_parse_falls_back_when_unnumbered(auth_client, db_session, digest_setup):
+    """Two emails → one batch call; an unparseable response falls back to
+    one summary call per email, then synthesis (1 + 2 + 1)."""
+    chat = respx.post(CHAT_URL).mock(return_value=llm_response("not numbered"))
+    d = digest_setup["digest"]
+    auth_client.post(f"/api/v1/digests/{d['id']}/run-now", json={"preview": True})
+    assert chat.call_count == 4
+
+
+async def test_fetch_context_length_parses_props():
+    from app.services import llm
+
+    settings = {"llm_base_url": "http://host.docker.internal:8081/v1"}
+    with respx.mock:
+        respx.get("http://host.docker.internal:8081/props").mock(
+            return_value=Response(200, json={"n_ctx": 8192}))
+        assert await llm.fetch_context_length(settings) == 8192
+
+
+async def test_fetch_context_length_none_on_failure():
+    from app.services import llm
+
+    settings = {"llm_base_url": "http://host.docker.internal:8081/v1"}
+    with respx.mock:
+        respx.get("http://host.docker.internal:8081/props").mock(
+            return_value=Response(404))
+        assert await llm.fetch_context_length(settings) is None
 
 
 def test_render_message_uses_digest_timezone():

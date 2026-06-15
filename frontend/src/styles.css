@@ -386,9 +386,11 @@ code {
   font-size: 0.85rem;
 }
 
-.cat-count {
+.status-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.15rem;
 }
 
 /* tables */
@@ -524,15 +526,6 @@ tr.clickable {
 
 .pulse {
   animation: pulse 1.6s ease-in-out infinite;
-}
-
-.payload {
-  font-family: monospace;
-  font-size: 0.75rem;
-  max-width: 360px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .row-actions {
@@ -1260,8 +1253,7 @@ label.checkbox input {
   .activity-table td[data-label="Detail"] {
     order: 4;
     flex-basis: 100%;
-    font-family: monospace;
-    font-size: 0.72rem;
+    font-size: 0.82rem;
     color: var(--muted);
   }
   .rules-table td.order-cell {

@@ -65,8 +65,10 @@ def test_stats(auth_client, dataset):
     stats = auth_client.get("/api/v1/stats").json()
     assert stats["today"]["processed"] == 2   # e1 classified, e2 actioned (e4 pending)
     assert stats["week"]["processed"] == 3
-    cats = {c["category"]: c["count"] for c in stats["by_category"]}
-    assert cats == {"MarketNews": 1, "Receipts": 1, "none": 1}
+    cats = {c["category"]: c for c in stats["category_precision"]}
+    assert cats["MarketNews"]["classified_1d"] == 1
+    assert cats["MarketNews"]["classified_7d"] == 1
+    assert cats["Receipts"]["classified_7d"] == 1
     assert any(a["event_type"] == "poll_completed" for a in stats["recent_activity"])
 
 

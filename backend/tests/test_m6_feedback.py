@@ -148,11 +148,11 @@ def test_precision_stats_reflect_feedback(auth_client, misclassified):
         "correct_category_id": misclassified["receipts"]})
     stats = auth_client.get("/api/v1/stats").json()
     by_name = {p["category"]: p for p in stats["category_precision"]}
-    assert by_name["MarketNews"]["classified_total"] == 1
-    assert by_name["MarketNews"]["flagged_wrong"] == 1
-    assert by_name["MarketNews"]["precision"] == 0.0
-    assert by_name["Receipts"]["flagged_wrong"] == 0
-    assert by_name["Receipts"]["precision"] is None  # nothing classified yet
+    assert by_name["MarketNews"]["classified_7d"] == 1
+    assert by_name["MarketNews"]["flagged_wrong_7d"] == 1
+    assert by_name["MarketNews"]["precision_7d"] == 0.0
+    assert by_name["Receipts"]["flagged_wrong_7d"] == 0
+    assert by_name["Receipts"]["precision_7d"] is None  # nothing classified yet
 
 
 @respx.mock
