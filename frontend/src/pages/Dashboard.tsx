@@ -106,12 +106,9 @@ export default function Dashboard() {
               <h4>Classifier</h4>
               {status?.classifier.running ? (
                 <>
-                  <div className="big pulse">
-                    {status.classifier.done}/{status.classifier.total}
-                  </div>
+                  <div className="big pulse">{status.classifier.pending_emails}</div>
                   <div className="sub">
-                    <Badge tone="warn">classifying…</Badge>{" "}
-                    {status.classifier.pending_emails} email(s) pending
+                    pending · <Badge tone="warn">classifying…</Badge>
                   </div>
                 </>
               ) : (
