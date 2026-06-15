@@ -16,6 +16,10 @@ class AppState:
     classifier_done: int = 0
     classifier_total: int = 0
     classifier_current_email_id: int | None = None
+    # Auth state cached from the DB (settings table) to avoid a query per request.
+    # Refreshed at startup and whenever an /auth endpoint mutates it.
+    auth_disabled: bool = False
+    ui_password_hash: str | None = None
 
 
 app_state = AppState()

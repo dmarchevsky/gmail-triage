@@ -41,8 +41,9 @@ class AppConfig(BaseSettings):
             )
         if self.ui_password.strip().lower() in FORBIDDEN_SECRET_VALUES:
             raise RuntimeError(
-                "UI_PASSWORD is not set (or is a known default). "
-                "MailTriage has no auth-less mode; refusing to start."
+                "UI_PASSWORD is not set (or is a known default). It is the bootstrap "
+                "password (overridable, and disable-able, at runtime in Settings); "
+                "refusing to start without it."
             )
 
     @property

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
+from app import auth
 from app.api import (
     admin_routes,
     auth_routes,
@@ -57,6 +58,7 @@ async def lifespan(app: FastAPI):
     assert_stored_scopes_safe()
     session = get_sessionmaker()()
     try:
+        auth.load_auth_state(session)
         await llm.health_probe(settings_service.get_all_settings(session, redact=False),
                                timeout=5)
     finally:

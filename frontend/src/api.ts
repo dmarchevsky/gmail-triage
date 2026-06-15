@@ -178,6 +178,7 @@ export interface Settings {
   telegram_default_chat_id: string;
   gmail_client_secret_json_configured: boolean;
   ui_password_hash_configured: boolean;
+  auth_disabled: boolean;
   ignore_senders: string[];
   poll_scope_labels: string[];
   poller_paused: boolean;

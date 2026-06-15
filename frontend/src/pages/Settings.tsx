@@ -148,6 +148,159 @@ export function GmailConnect({ onChange }: { onChange?: () => void }) {
   );
 }
 
+function AuthSection({
+  settings,
+  onChange,
+}: {
+  settings: Settings;
+  onChange: () => Promise<void> | void;
+}) {
+  const toast = useToast();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [disablePw, setDisablePw] = useState("");
+  const [confirmingDisable, setConfirmingDisable] = useState(false);
+  const authActive = !settings.auth_disabled;
+
+  const changePassword = async () => {
+    if (!next.trim()) {
+      toast.error("New password must not be empty");
+      return;
+    }
+    if (next !== confirm) {
+      toast.error("New passwords do not match");
+      return;
+    }
+    try {
+      await put("/auth/password", { current_password: current, new_password: next });
+      toast.success("Password changed");
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      await onChange();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const enableAuth = async () => {
+    try {
+      await post("/auth/enable");
+      toast.success("Password authentication enabled");
+      await onChange();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="settings-section">
+      <h3>
+        Authentication{" "}
+        {authActive ? (
+          <Badge tone="ok">password required</Badge>
+        ) : (
+          <Badge tone="warn">password disabled</Badge>
+        )}
+      </h3>
+      {authActive ? (
+        <>
+          <p className="sub">
+            Change the web UI password. Stored encrypted in the database — no restart
+            needed. {settings.ui_password_hash_configured
+              ? "A custom password is set."
+              : "Currently using the UI_PASSWORD from the environment."}
+          </p>
+          <div className="form-grid">
+            <label>
+              Current password
+              <input
+                type="password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+              />
+            </label>
+            <span />
+            <label>
+              New password
+              <input
+                type="password"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+              />
+            </label>
+            <label>
+              Confirm new password
+              <input
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="head-actions">
+            <button className="primary" onClick={changePassword}>
+              Change password
+            </button>
+            <button className="danger" onClick={() => setConfirmingDisable(true)}>
+              Disable password
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="sub">
+            Password authentication is <b>disabled</b> — anyone who can reach this app
+            has full access. Re-enable it to require the password again.
+          </p>
+          <button className="primary" onClick={enableAuth}>
+            Enable password
+          </button>
+        </>
+      )}
+
+      {confirmingDisable && (
+        <ConfirmDialog
+          title="Disable password authentication?"
+          danger
+          confirmLabel="Disable password"
+          message={
+            <>
+              <p>
+                Anyone who can reach this app will have full access with no login. Enter
+                your current password to confirm.
+              </p>
+              <input
+                type="password"
+                placeholder="Current password"
+                value={disablePw}
+                onChange={(e) => setDisablePw(e.target.value)}
+                autoFocus
+              />
+            </>
+          }
+          onConfirm={async () => {
+            try {
+              await post("/auth/disable", { current_password: disablePw });
+              setConfirmingDisable(false);
+              setDisablePw("");
+              toast.success("Password authentication disabled");
+              await onChange();
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : String(e));
+            }
+          }}
+          onCancel={() => {
+            setConfirmingDisable(false);
+            setDisablePw("");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { refresh } = useApp();
   const toast = useToast();
@@ -352,6 +505,14 @@ export default function SettingsPage() {
           </AsyncButton>
         </div>
       </div>
+
+      <AuthSection
+        settings={settings}
+        onChange={async () => {
+          await load();
+          await refresh();
+        }}
+      />
 
       <div className="settings-section">
         <h3>Config export / import</h3>

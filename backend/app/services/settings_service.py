@@ -39,7 +39,15 @@ DEFAULTS: dict[str, Any] = {
                           "CATEGORY_UPDATES", "CATEGORY_FORUMS"],
     "poller_paused": False,
     "first_run_complete": False,
+    # Auth: managed only via the dedicated /auth endpoints (see update_settings
+    # guard below), never through the generic PUT /settings.
+    "auth_disabled": False,
+    "ui_password_hash": "",
 }
+
+# Settings that must not be changed through the generic PUT /settings — they go
+# through dedicated endpoints that enforce current-password checks / hashing.
+PROTECTED_KEYS = {"auth_disabled", "ui_password_hash"}
 
 
 def _encrypt(value: str) -> str:
@@ -91,4 +99,6 @@ def update_settings(session: Session, updates: dict[str, Any]) -> None:
     for key, value in updates.items():
         if key not in DEFAULTS:
             raise KeyError(f"Unknown setting: {key}")
+        if key in PROTECTED_KEYS:
+            raise KeyError(f"Setting must be changed via /auth endpoints: {key}")
         set_setting(session, key, value)

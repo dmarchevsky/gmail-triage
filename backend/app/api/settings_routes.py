@@ -38,6 +38,8 @@ def import_settings(payload: dict[str, Any],
     for key, value in payload.items():
         if key.endswith("_configured") or key not in settings_service.DEFAULTS:
             continue
+        if key in settings_service.PROTECTED_KEYS:
+            continue  # auth state is managed only via /auth endpoints
         applied[key] = value
     settings_service.update_settings(session, applied)
     audit(session, "user", "settings_imported",
