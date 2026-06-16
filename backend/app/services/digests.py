@@ -71,9 +71,11 @@ def _clamp_tokens(tokens: int, settings: dict) -> int:
 
 
 def _summary_line(email: Email) -> str:
-    """One digest line for an email, from its saved summary (snippet fallback)."""
+    """One digest line for an email, from its saved summary (snippet fallback).
+    Content only — sender/subject/time live in the message list below, so they
+    are deliberately omitted here."""
     text = (email.summary or email.snippet or "").strip()
-    return f"- [{email.sender} | {email.subject or '(no subject)'}] {text[:500]}"
+    return f"- {text[:500]}"
 
 
 async def _summarize(session: Session, digest: Digest, emails: list[Email],
