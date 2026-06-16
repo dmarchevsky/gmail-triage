@@ -184,6 +184,20 @@ async def poll_once(session: Session) -> dict:
     return {"mode": mode, "new_emails": new_count}
 
 
+def _record_poll_failure(session, error: str, *, kind: str | None = None) -> None:
+    """Audit a poll failure so it surfaces in Recent activity. Best-effort: the
+    poller must survive even if logging the failure itself fails."""
+    payload: dict[str, str] = {"error": error}
+    if kind:
+        payload["kind"] = kind
+    try:
+        session.rollback()  # discard any partial work from the failed cycle
+        audit(session, "system", "poll_failed", payload)
+        session.commit()
+    except Exception:  # noqa: BLE001 — never let audit logging crash the loop
+        log.warning("poll_failure_audit_failed", error=error)
+
+
 async def poller_loop() -> None:
     """Background task; never crashes the app on Gmail errors."""
     from app.db import get_sessionmaker
@@ -214,12 +228,14 @@ async def poller_loop() -> None:
             app_state.gmail_status = "auth_error"
             app_state.poller_last_error = str(e)
             log.warning("poll_auth_error", error=str(e))
+            _record_poll_failure(session, str(e), kind="auth")
         except asyncio.CancelledError:
             app_state.poller_status = "stopped"
             raise
         except Exception as e:  # noqa: BLE001 — poller must survive anything
             app_state.poller_last_error = str(e)
             log.error("poll_cycle_failed", error=str(e))
+            _record_poll_failure(session, str(e))
         finally:
             session.close()
 

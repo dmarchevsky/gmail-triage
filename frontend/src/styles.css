@@ -778,12 +778,15 @@ label.checkbox input {
   padding: 0.5rem 0.75rem;
 }
 
-.action-list {
-  list-style: none;
-  padding: 0;
+.action-summary {
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.action-summary .action-status {
+  margin-left: 0.2rem;
 }
 
 .feedback-form {

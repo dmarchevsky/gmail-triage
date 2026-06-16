@@ -51,6 +51,7 @@ export const EVENT_LABELS: Record<string, string> = {
   // poller / classifier
   poll_run_now: "Poll (manual)",
   poll_completed: "Poll completed",
+  poll_failed: "Poll failed",
   poller_paused: "Poller paused",
   poller_resumed: "Poller resumed",
   actions_executed: "Actions applied",
@@ -95,6 +96,7 @@ const ruleRef = (p: Payload): string => {
 const FORMATTERS: Record<string, (p: Payload) => string> = {
   poll_completed: (p) =>
     `${p.new_emails ?? 0} new email(s)${p.mode ? ` (${p.mode})` : ""}`,
+  poll_failed: (p) => String(p.error ?? "unknown error"),
   poll_run_now: (p) => `${p.new_emails ?? 0} new email(s)`,
   actions_executed: (p) => {
     const live = joinActions(p.live_actions);

@@ -45,6 +45,10 @@ def test_email_filters(auth_client, dataset):
     assert auth_client.get("/api/v1/emails?status=actioned").json()["total"] == 1
     assert auth_client.get("/api/v1/emails?confidence_min=0.5").json()["total"] == 2
     assert auth_client.get("/api/v1/emails?q=receipt").json()["total"] == 1
+    # received_within_hours: -5m, -1h, -2h within 3h; -3d excluded.
+    assert auth_client.get("/api/v1/emails?received_within_hours=3").json()["total"] == 3
+    # within 1.5h keeps only -5m and -1h.
+    assert auth_client.get("/api/v1/emails?received_within_hours=1.5").json()["total"] == 2
     page = auth_client.get("/api/v1/emails?page_size=2&page=2").json()
     assert page["total"] == 4 and len(page["items"]) == 2
     # newest first

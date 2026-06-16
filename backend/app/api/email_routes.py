@@ -60,6 +60,7 @@ def list_emails(
     confidence_max: float | None = Query(default=None, ge=0, le=1),
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    received_within_hours: float | None = Query(default=None, gt=0),
     q: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
@@ -81,6 +82,9 @@ def list_emails(
         query = query.where(Email.received_at >= date_from)
     if date_to:
         query = query.where(Email.received_at <= date_to)
+    if received_within_hours is not None:
+        query = query.where(Email.received_at >=
+                            datetime.now(UTC) - timedelta(hours=received_within_hours))
     if q:
         like = f"%{q}%"
         query = query.where(Email.subject.ilike(like) | Email.sender.ilike(like))
@@ -102,6 +106,7 @@ def list_email_ids(
     confidence_max: float | None = Query(default=None, ge=0, le=1),
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    received_within_hours: float | None = Query(default=None, gt=0),
     q: str | None = None,
 ) -> dict:
     """All IDs matching the current filters (no pagination). Used for
@@ -122,6 +127,9 @@ def list_email_ids(
         query = query.where(Email.received_at >= date_from)
     if date_to:
         query = query.where(Email.received_at <= date_to)
+    if received_within_hours is not None:
+        query = query.where(Email.received_at >=
+                            datetime.now(UTC) - timedelta(hours=received_within_hours))
     if q:
         like = f"%{q}%"
         query = query.where(Email.subject.ilike(like) | Email.sender.ilike(like))

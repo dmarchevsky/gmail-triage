@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, EmailList, EmailRow, StatusResponse, get, post } from "../api";
+import { Category, EmailAction, EmailList, EmailRow, StatusResponse, get, post } from "../api";
 import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
@@ -137,30 +137,41 @@ function EmailDetail({
           const displayActions = maxExecutedAt
             ? email.actions.filter((a) => !a.executed_at || a.executed_at === maxExecutedAt)
             : email.actions;
+          if (displayActions.length === 0) return <p className="sub">No actions.</p>;
+
+          // Labels keep badge styling; every other action is plain text. A single
+          // shared status + date/time describes the whole group.
+          const isLabel = (a: EmailAction) =>
+            a.action_type === "add_label" && Boolean(a.action_params?.label_name);
+          const labelActions = displayActions.filter(isLabel);
+          const otherActions = displayActions.filter((a) => !isLabel(a));
+          const errors = displayActions.filter((a) => a.error);
+          const status = displayActions.some((a) => a.executed)
+            ? `executed · ${fmtDate(maxExecutedAt)}`
+            : displayActions.some((a) => a.dry_run)
+              ? "planned (dry-run)"
+              : "not executed";
           return (
             <>
-              {displayActions.length === 0 && <p className="sub">No actions.</p>}
-              <ul className="action-list">
-                {displayActions.map((a) => (
-                  <li key={a.id}>
-                    <span>{actionLabel(a.action_type)}</span>{" "}
-                    {a.action_type === "add_label" && a.action_params?.label_name ? (
-                      <LabelPill
-                        name={String(a.action_params.label_name)}
-                        textColor={a.action_params.text_color as string | null}
-                        backgroundColor={a.action_params.background_color as string | null}
-                      />
-                    ) : null}{" "}
-                    {a.executed ? (
-                      <Badge tone="ok">executed {fmtDate(a.executed_at)}</Badge>
-                    ) : a.dry_run ? (
-                      <Badge tone="dry">planned</Badge>
-                    ) : (
-                      <Badge tone="error">{a.error ? `failed: ${a.error}` : "not executed"}</Badge>
-                    )}
-                  </li>
+              <div className="action-summary">
+                {labelActions.map((a) => (
+                  <LabelPill
+                    key={a.id}
+                    name={String(a.action_params?.label_name)}
+                    textColor={a.action_params?.text_color as string | null}
+                    backgroundColor={a.action_params?.background_color as string | null}
+                  />
                 ))}
-              </ul>
+                {otherActions.length > 0 && (
+                  <span>{otherActions.map((a) => actionLabel(a.action_type)).join(" · ")}</span>
+                )}
+                <span className="sub action-status">{status}</span>
+              </div>
+              {errors.map((a) => (
+                <p key={a.id} className="error">
+                  {actionLabel(a.action_type)} failed: {a.error}
+                </p>
+              ))}
             </>
           );
         })()}
@@ -201,12 +212,17 @@ export default function Emails() {
   const [filters, setFilters] = useState({
     category_id: "",
     status: "",
+    period_hours: "",
     q: "",
   });
-  const hasActiveFilters = filters.category_id !== "" || filters.status !== "" || filters.q !== "";
+  const [periodCustom, setPeriodCustom] = useState(false);
+  const hasActiveFilters =
+    filters.category_id !== "" || filters.status !== "" ||
+    filters.period_hours !== "" || filters.q !== "";
   const clearFilters = () => {
     setPage(1);
-    setFilters({ category_id: "", status: "", q: "" });
+    setPeriodCustom(false);
+    setFilters({ category_id: "", status: "", period_hours: "", q: "" });
   };
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [allMatchingSelected, setAllMatchingSelected] = useState(false);
@@ -217,6 +233,7 @@ export default function Emails() {
     params.set("page", String(page));
     if (filters.category_id) params.set("category_id", filters.category_id);
     if (filters.status) params.set("status", filters.status);
+    if (filters.period_hours) params.set("received_within_hours", filters.period_hours);
     if (filters.q) params.set("q", filters.q);
     setList(await get<EmailList>(`/emails?${params.toString()}`));
   }, [page, filters]);
@@ -233,6 +250,7 @@ export default function Emails() {
   // Live refresh while classification runs: poll /status cheaply; reload the
   // list on every tick while running, plus once more when it finishes.
   const [classifying, setClassifying] = useState(false);
+  const [pending, setPending] = useState(0);
   const wasRunning = useRef(false);
   useEffect(() => {
     const tick = async () => {
@@ -240,6 +258,7 @@ export default function Emails() {
         const st = await get<StatusResponse>("/status");
         const running = st.classifier.running || st.classifier.pending_emails > 0;
         setClassifying(running);
+        setPending(st.classifier.pending_emails);
         if (running || wasRunning.current) await load();
         wasRunning.current = running;
       } catch {
@@ -280,6 +299,7 @@ export default function Emails() {
       const params = new URLSearchParams();
       if (filters.category_id) params.set("category_id", filters.category_id);
       if (filters.status) params.set("status", filters.status);
+      if (filters.period_hours) params.set("received_within_hours", filters.period_hours);
       if (filters.q) params.set("q", filters.q);
       const result = await get<{ ids: number[] }>(`/emails/ids?${params.toString()}`);
       setSelectedIds(new Set(result.ids));
@@ -323,7 +343,11 @@ export default function Emails() {
     <div>
       <header className="page-head">
         <h2>Emails</h2>
-        {classifying && <Badge tone="warn">classifying — list updates live</Badge>}
+        {classifying ? (
+          <Badge tone="info">Classifying… · {pending} pending</Badge>
+        ) : (
+          <Badge tone="neutral">Classifier: idle</Badge>
+        )}
       </header>
 
       <div className="filters">
@@ -364,6 +388,39 @@ export default function Emails() {
             </option>
           ))}
         </select>
+        <select
+          value={periodCustom ? "custom" : filters.period_hours}
+          onChange={(e) => {
+            const v = e.target.value;
+            setPage(1);
+            if (v === "custom") {
+              setPeriodCustom(true);
+            } else {
+              setPeriodCustom(false);
+              setFilters({ ...filters, period_hours: v });
+            }
+          }}
+        >
+          <option value="">Any time</option>
+          <option value="1">Past 1h</option>
+          <option value="4">Past 4h</option>
+          <option value="8">Past 8h</option>
+          <option value="24">Past 24h</option>
+          <option value="custom">Custom…</option>
+        </select>
+        {periodCustom && (
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="hours"
+            value={filters.period_hours}
+            onChange={(e) => {
+              setPage(1);
+              setFilters({ ...filters, period_hours: e.target.value });
+            }}
+          />
+        )}
         <button
           className="clear-filters"
           onClick={clearFilters}
