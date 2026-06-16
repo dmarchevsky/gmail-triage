@@ -104,8 +104,12 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
                         response_format = None
                         messages[0] = {"role": "system", "content":
                                        system + "\nRespond ONLY with JSON. No prose."}
-                        completion = await client.chat.completions.create(
-                            model=model, messages=messages, temperature=0)
+                        try:
+                            completion = await client.chat.completions.create(
+                                model=model, messages=messages, temperature=0)
+                        except APIStatusError as e2:
+                            raise LLMError(
+                                f"LLM HTTP {e2.status_code}: {e2.message}") from e2
                     else:
                         raise LLMError(f"LLM HTTP {e.status_code}: {e.message}") from e
 

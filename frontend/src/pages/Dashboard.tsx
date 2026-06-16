@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LlmQueue, Stats, get, post } from "../api";
 import { AsyncButton, Badge, fmtDate } from "../components";
 import { describeActivity, eventLabel } from "../activity";
@@ -18,7 +18,12 @@ export default function Dashboard() {
   const [queue, setQueue] = useState<LlmQueue | null>(null);
 
   const load = () => get<Stats>("/stats").then(setStats);
-  const loadQueue = () => get<LlmQueue>("/llm/queue").then(setQueue);
+  const sortedPrecision = useMemo(
+    () => stats
+      ? [...stats.category_precision].sort((a, b) => b.classified_7d - a.classified_7d)
+      : [],
+    [stats],
+  );
 
   // Surface poller errors as a transient toast (and rely on Recent activity for
   // the durable record) instead of a persistent page banner. Fire only when the
@@ -35,10 +40,24 @@ export default function Dashboard() {
     const id = setInterval(load, 20000);
     return () => clearInterval(id);
   }, []);
+  // Live view of in-flight LLM work: poll fast (5s) only while the queue is
+  // busy, otherwise back off to 30s so an idle dashboard isn't hammering the API.
   useEffect(() => {
-    loadQueue();
-    const id = setInterval(loadQueue, 5000); // live view of in-flight LLM work
-    return () => clearInterval(id);
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+    const tick = async () => {
+      const q = await get<LlmQueue>("/llm/queue").catch(() => null);
+      if (cancelled) return;
+      if (q) setQueue(q);
+      const active = !!q &&
+        (q.pending > 0 || q.processing.length > 0 || q.digests.length > 0);
+      timer = setTimeout(tick, active ? 5000 : 30000);
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   return (
@@ -213,9 +232,7 @@ export default function Dashboard() {
                     </td>
                   </tr>
                 )}
-                {[...stats.category_precision]
-                  .sort((a, b) => b.classified_7d - a.classified_7d)
-                  .map((p) => (
+                {sortedPrecision.map((p) => (
                   <tr key={p.category_id}>
                     <td data-label="Category">{p.category}</td>
                     <td data-label="Classified (1d)">{p.classified_1d}</td>

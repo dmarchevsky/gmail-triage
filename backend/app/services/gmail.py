@@ -351,13 +351,11 @@ def parse_message_meta(msg: dict) -> dict:
     return {
         "gmail_message_id": msg["id"],
         "gmail_thread_id": msg.get("threadId"),
-        "history_id": msg.get("historyId"),
         "received_at": received,
         "sender": sender[:512],
         "sender_domain": domain,
         "subject": headers.get("subject", "")[:2000],
         "snippet": msg.get("snippet", ""),
-        "size_estimate": msg.get("sizeEstimate"),
         "label_ids": msg.get("labelIds", []),
     }
 

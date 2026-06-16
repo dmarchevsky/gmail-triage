@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useSelection } from "../useSelection";
 import {
   Category,
   ColorSwatch,
@@ -6,6 +7,7 @@ import {
   Label,
   del,
   delWithBody,
+  errMsg,
   get,
   post,
   put,
@@ -66,10 +68,12 @@ function CategoryEditor({
   }, [category]);
 
   // Auto-fill quick names from the category name when they're still empty.
+  // Functional updaters read the current value (no stale closure), so the dep
+  // list is complete without listing the names themselves.
   useEffect(() => {
-    if (quickRule && !quickRuleName) setQuickRuleName(form.name || "");
-    if (quickDigest && !quickDigestName) setQuickDigestName(form.name || "");
-  }, [quickRule, quickDigest, form.name]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (quickRule) setQuickRuleName((prev) => prev || form.name || "");
+    if (quickDigest) setQuickDigestName((prev) => prev || form.name || "");
+  }, [quickRule, quickDigest, form.name]);
 
   const save = async () => {
     try {
@@ -115,7 +119,7 @@ function CategoryEditor({
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -371,7 +375,7 @@ function HistoryViewer({
                       onRestored();
                       onClose();
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : String(e));
+                      toast.error(errMsg(e));
                     }
                   }}
                 >
@@ -394,7 +398,6 @@ export default function Categories() {
   const [editing, setEditing] = useState<Category | null | "new">(null);
   const [history, setHistory] = useState<Category | null>(null);
   const [deleting, setDeleting] = useState<Category | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState<"delete" | null>(null);
 
   const load = useCallback(() => get<Category[]>("/categories").then(setCategories), []);
@@ -402,25 +405,10 @@ export default function Categories() {
     load();
   }, [load]);
 
-  const allChecked =
-    categories.length > 0 && categories.every((c) => selectedIds.has(c.id));
-  const someChecked = categories.some((c) => selectedIds.has(c.id));
-  const selectAllRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (selectAllRef.current)
-      selectAllRef.current.indeterminate = someChecked && !allChecked;
-  }, [someChecked, allChecked]);
-
-  const toggleSelect = (id: number) =>
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  const selectAll = () => setSelectedIds(new Set(categories.map((c) => c.id)));
-  const clearSelection = () => setSelectedIds(new Set());
+  const {
+    selectedIds, allChecked, selectAllRef,
+    toggle: toggleSelect, selectAll, clear: clearSelection,
+  } = useSelection(categories, (c) => c.id);
 
   const doBulkEnable = async (enabled: boolean) => {
     const ids = Array.from(selectedIds);
@@ -433,7 +421,7 @@ export default function Categories() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -447,7 +435,7 @@ export default function Categories() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 

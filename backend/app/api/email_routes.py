@@ -51,22 +51,23 @@ def serialize_email(e: Email, detail: bool = False) -> dict:
     return data
 
 
-@router.get("/emails")
-def list_emails(
-    session: Session = Depends(get_session),
-    category_id: int | None = None,
-    status: str | None = None,
-    confidence_min: float | None = Query(default=None, ge=0, le=1),
-    confidence_max: float | None = Query(default=None, ge=0, le=1),
-    date_from: datetime | None = None,
-    date_to: datetime | None = None,
-    received_within_hours: float | None = Query(default=None, gt=0),
-    q: str | None = None,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
-) -> dict:
-    query = select(Email).options(joinedload(Email.classification),
-                                  joinedload(Email.actions))
+def _apply_email_filters(
+    query,
+    *,
+    category_id: int | None,
+    status: str | None,
+    confidence_min: float | None,
+    confidence_max: float | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    received_within_hours: float | None,
+    q: str | None,
+):
+    """Apply the shared email list/select-all filters to a select() statement.
+
+    Used by both /emails (paginated page) and /emails/ids (select-all-across-
+    pages) so the two can never silently diverge — a divergence would let a
+    bulk action hit emails the user never saw."""
     if category_id is not None:
         if category_id == 0:  # 0 = unclassified/"none"
             query = query.where(Email.classification_id.is_(None))
@@ -88,8 +89,35 @@ def list_emails(
     if q:
         like = f"%{q}%"
         query = query.where(Email.subject.ilike(like) | Email.sender.ilike(like))
+    return query
 
-    total = session.scalar(select(func.count()).select_from(query.subquery()))
+
+@router.get("/emails")
+def list_emails(
+    session: Session = Depends(get_session),
+    category_id: int | None = None,
+    status: str | None = None,
+    confidence_min: float | None = Query(default=None, ge=0, le=1),
+    confidence_max: float | None = Query(default=None, ge=0, le=1),
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    received_within_hours: float | None = Query(default=None, gt=0),
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    filters = dict(category_id=category_id, status=status,
+                   confidence_min=confidence_min, confidence_max=confidence_max,
+                   date_from=date_from, date_to=date_to,
+                   received_within_hours=received_within_hours, q=q)
+    # Count over a plain id-select (no joinedload) — counting over the
+    # joinedload(Email.actions) one-to-many would inflate the total by the
+    # number of actions per email.
+    total = session.scalar(select(func.count()).select_from(
+        _apply_email_filters(select(Email.id), **filters).subquery()))
+    query = _apply_email_filters(
+        select(Email).options(joinedload(Email.classification),
+                              joinedload(Email.actions)), **filters)
     rows = session.scalars(
         query.order_by(Email.received_at.desc())
         .offset((page - 1) * page_size).limit(page_size)).unique()
@@ -111,28 +139,11 @@ def list_email_ids(
 ) -> dict:
     """All IDs matching the current filters (no pagination). Used for
     select-all-across-pages. Capped at 5 000."""
-    query = select(Email.id)
-    if category_id is not None:
-        if category_id == 0:
-            query = query.where(Email.classification_id.is_(None))
-        else:
-            query = query.where(Email.classification_id == category_id)
-    if status:
-        query = query.where(Email.status == status)
-    if confidence_min is not None:
-        query = query.where(Email.confidence >= confidence_min)
-    if confidence_max is not None:
-        query = query.where(Email.confidence <= confidence_max)
-    if date_from:
-        query = query.where(Email.received_at >= date_from)
-    if date_to:
-        query = query.where(Email.received_at <= date_to)
-    if received_within_hours is not None:
-        query = query.where(Email.received_at >=
-                            datetime.now(UTC) - timedelta(hours=received_within_hours))
-    if q:
-        like = f"%{q}%"
-        query = query.where(Email.subject.ilike(like) | Email.sender.ilike(like))
+    query = _apply_email_filters(
+        select(Email.id), category_id=category_id, status=status,
+        confidence_min=confidence_min, confidence_max=confidence_max,
+        date_from=date_from, date_to=date_to,
+        received_within_hours=received_within_hours, q=q)
     ids = list(session.scalars(
         query.order_by(Email.received_at.desc()).limit(5000)))
     return {"ids": ids}
@@ -252,10 +263,12 @@ async def rerun_rules_bulk(body: BulkEmailIds,
         raise HTTPException(status_code=409, detail=str(e)) from e
 
     counts = {"processed": 0, "actioned": 0, "errors": 0}
+    label_cache: dict = {}
     try:
         for email in eligible:
             try:
-                await rules_engine.apply_rules_to_email(session, client, email, rules)
+                await rules_engine.apply_rules_to_email(session, client, email, rules,
+                                                        label_cache)
                 counts["processed"] += 1
                 if email.status == EmailStatus.actioned.value:
                     counts["actioned"] += 1
@@ -316,23 +329,33 @@ def stats(session: Session = Depends(get_session)) -> dict:
     # flagged with a different correct category counts against C. LLM
     # confidence is uncalibrated — these empirical counts are what the user
     # should tune rule thresholds against (spec §4.2 note).
+    # Aggregate per-category counts in a fixed number of grouped queries
+    # rather than 3 COUNTs per category (which scaled with category count).
+    def classified_by_category(since: datetime) -> dict[int, int]:
+        rows = session.execute(
+            select(Email.classification_id, func.count(Email.id))
+            .where(Email.classification_id.is_not(None),
+                   Email.status.in_(["classified", "actioned"]),
+                   Email.created_at >= since)
+            .group_by(Email.classification_id))
+        return {cid: cnt for cid, cnt in rows}
+
+    classified_1d_by_cat = classified_by_category(today)
+    classified_7d_by_cat = classified_by_category(week)
+    flagged_7d_by_cat = {cid: cnt for cid, cnt in session.execute(
+        select(Email.classification_id, func.count(Feedback.id))
+        .join(Email, Email.id == Feedback.email_id)
+        .where(Email.classification_id.is_not(None),
+               Email.created_at >= week,
+               (Feedback.correct_category_id.is_(None))
+               | (Feedback.correct_category_id != Email.classification_id))
+        .group_by(Email.classification_id))}
+
     precision = []
     for category in session.scalars(select(Category).order_by(Category.id)):
-        classified_1d = session.scalar(select(func.count(Email.id)).where(
-            Email.classification_id == category.id,
-            Email.status.in_(["classified", "actioned"]),
-            Email.created_at >= today)) or 0
-        classified_7d = session.scalar(select(func.count(Email.id)).where(
-            Email.classification_id == category.id,
-            Email.status.in_(["classified", "actioned"]),
-            Email.created_at >= week)) or 0
-        flagged_wrong_7d = session.scalar(
-            select(func.count(Feedback.id))
-            .join(Email, Email.id == Feedback.email_id)
-            .where(Email.classification_id == category.id,
-                   Email.created_at >= week,
-                   (Feedback.correct_category_id.is_(None))
-                   | (Feedback.correct_category_id != category.id))) or 0
+        classified_1d = classified_1d_by_cat.get(category.id, 0)
+        classified_7d = classified_7d_by_cat.get(category.id, 0)
+        flagged_wrong_7d = flagged_7d_by_cat.get(category.id, 0)
         precision.append({
             "category_id": category.id,
             "category": category.name,
@@ -345,24 +368,3 @@ def stats(session: Session = Depends(get_session)) -> dict:
 
     return {"today": window(today), "week": window(week),
             "recent_activity": recent, "category_precision": precision}
-
-
-@router.get("/audit-log")
-def audit_log(
-    session: Session = Depends(get_session),
-    event_type: str | None = None,
-    actor: str | None = None,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
-) -> dict:
-    query = select(AuditLog)
-    if event_type:
-        query = query.where(AuditLog.event_type == event_type)
-    if actor:
-        query = query.where(AuditLog.actor == actor)
-    total = session.scalar(select(func.count()).select_from(query.subquery()))
-    rows = session.scalars(query.order_by(AuditLog.ts.desc())
-                           .offset((page - 1) * page_size).limit(page_size))
-    return {"total": total, "page": page, "items": [{
-        "id": r.id, "ts": r.ts.isoformat() if r.ts else None, "actor": r.actor,
-        "event_type": r.event_type, "payload": r.payload} for r in rows]}

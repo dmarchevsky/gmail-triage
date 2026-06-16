@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ColorSwatch, Label, del, get, post, put } from "../api";
+import { ColorSwatch, Label, del, errMsg, get, post, put } from "../api";
 import { ConfirmDialog, LabelPill, Modal, SwatchPicker } from "../components";
 import { useToast } from "../toast";
 
@@ -34,7 +34,7 @@ function LabelEditor({
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -165,7 +165,7 @@ export default function Labels() {
               await del(`/labels/${deleting.id}`);
               toast.success("Label deleted");
             } catch (e) {
-              toast.error(e instanceof Error ? e.message : String(e));
+              toast.error(errMsg(e));
             }
             setDeleting(null);
             load();

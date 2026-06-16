@@ -60,7 +60,7 @@ export const EVENT_LABELS: Record<string, string> = {
 };
 
 // Turn a snake_case event_type into a readable title when not in EVENT_LABELS.
-export function humanize(key: string): string {
+function humanize(key: string): string {
   const s = key.replace(/_/g, " ").trim();
   return s ? s[0].toUpperCase() + s.slice(1) : key;
 }

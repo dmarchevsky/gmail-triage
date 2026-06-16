@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { post, put } from "../api";
+import { errMsg, post, put } from "../api";
 import { AsyncButton, ErrorNote } from "../components";
 import { GmailConnect } from "./Settings";
 import { useApp } from "../App";
@@ -112,7 +112,7 @@ export default function Wizard() {
                 await post("/categories", category);
                 setStep(step + 1);
               } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
+                setError(errMsg(e));
               }
             }}
             disabled={!category.name}

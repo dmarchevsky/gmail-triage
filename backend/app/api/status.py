@@ -51,8 +51,6 @@ def get_status(session: Session = Depends(get_session)) -> dict:
         },
         "classifier": {
             "running": app_state.classifier_running,
-            "done": app_state.classifier_done,
-            "total": app_state.classifier_total,
             "pending_emails": session.scalar(select(func.count(Email.id)).where(
                 Email.status.in_([EmailStatus.pending.value,
                                   EmailStatus.processing.value]))) or 0,

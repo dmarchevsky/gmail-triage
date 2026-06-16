@@ -8,6 +8,10 @@ export class ApiError extends Error {
   }
 }
 
+/** Normalize a thrown value to a displayable message string. */
+export const errMsg = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
+
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -53,7 +57,7 @@ export interface StatusResponse {
     paused: boolean;
   };
   rules_mode: { live: number; dry: number };
-  classifier: { running: boolean; done: number; total: number; pending_emails: number };
+  classifier: { running: boolean; pending_emails: number };
 }
 
 export interface Category {

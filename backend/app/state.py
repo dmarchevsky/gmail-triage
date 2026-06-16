@@ -13,8 +13,6 @@ class AppState:
     poller_last_run_at: str | None = None
     poller_last_error: str | None = None
     classifier_running: bool = False
-    classifier_done: int = 0
-    classifier_total: int = 0
     classifier_current_email_id: int | None = None
     # Auth state cached from the DB (settings table) to avoid a query per request.
     # Refreshed at startup and whenever an /auth endpoint mutates it.

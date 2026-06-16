@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from "react";
 
-export const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Record<string, string> = {
   add_label: "Add label",
   remove_label: "Remove label",
   mark_read: "Mark read",
@@ -80,10 +80,6 @@ export function Badge({
   tone?: "ok" | "warn" | "error" | "neutral" | "dry" | "info";
 }) {
   return <span className={`badge ${tone}`}>{children}</span>;
-}
-
-export function Spinner() {
-  return <span className="spinner">⏳</span>;
 }
 
 export function Modal({

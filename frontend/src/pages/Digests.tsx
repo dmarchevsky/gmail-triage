@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, Digest, DigestRun, del, delWithBody, get, post, put } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { Category, Digest, DigestRun, del, delWithBody, errMsg, get, post, put } from "../api";
+import { useSelection } from "../useSelection";
 import {
   AsyncButton,
   Badge,
@@ -75,7 +76,7 @@ function DigestEditor({
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -215,7 +216,6 @@ export default function Digests() {
   const [editing, setEditing] = useState<Digest | null | "new">(null);
   const [history, setHistory] = useState<Digest | null>(null);
   const [deleting, setDeleting] = useState<Digest | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState<"delete" | "send" | null>(null);
   const toast = useToast();
 
@@ -241,24 +241,10 @@ export default function Digests() {
   const catNames = (ids: number[]) =>
     ids.map((id) => categories.find((c) => c.id === id)?.name ?? `#${id}`).join(", ");
 
-  const allChecked = digests.length > 0 && digests.every((d) => selectedIds.has(d.id));
-  const someChecked = digests.some((d) => selectedIds.has(d.id));
-  const selectAllRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (selectAllRef.current)
-      selectAllRef.current.indeterminate = someChecked && !allChecked;
-  }, [someChecked, allChecked]);
-
-  const toggleSelect = (id: number) =>
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  const selectAll = () => setSelectedIds(new Set(digests.map((d) => d.id)));
-  const clearSelection = () => setSelectedIds(new Set());
+  const {
+    selectedIds, allChecked, selectAllRef,
+    toggle: toggleSelect, selectAll, clear: clearSelection,
+  } = useSelection(digests, (d) => d.id);
 
   const doBulkEnable = async (enabled: boolean) => {
     const ids = Array.from(selectedIds);
@@ -271,7 +257,7 @@ export default function Digests() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -285,7 +271,7 @@ export default function Digests() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -301,7 +287,7 @@ export default function Digests() {
       else toast.success(`${r.sent} digest${r.sent === 1 ? "" : "s"} sent`);
       clearSelection();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 

@@ -192,13 +192,17 @@ async def bulk_send_digests(body: BulkDigestIds,
     return {"sent": sent, "errors": errors}
 
 
+class RunNowBody(BaseModel):
+    preview: bool = False
+
+
 @router.post("/{digest_id}/run-now")
-async def run_now(digest_id: int, body: dict | None = None,
+async def run_now(digest_id: int, body: RunNowBody | None = None,
                   session: Session = Depends(get_session)) -> dict:
     digest = session.get(Digest, digest_id)
     if digest is None:
         raise HTTPException(status_code=404, detail="Digest not found")
-    preview = bool((body or {}).get("preview", False))
+    preview = body.preview if body is not None else False
     run = await run_digest(session, digest, actor="user", preview=preview)
     return serialize_run(run)
 

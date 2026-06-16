@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, Label, Rule, RuleAction, del, delWithBody, get, post, put } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { Category, Label, Rule, RuleAction, del, delWithBody, errMsg, get, post, put } from "../api";
+import { useSelection } from "../useSelection";
 import {
   Badge,
   BulkActionBar,
@@ -127,7 +128,7 @@ function RuleEditor({
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -304,7 +305,7 @@ function DefaultRuleEditor({
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -395,7 +396,6 @@ export default function Rules() {
   const [goingLive, setGoingLive] = useState<Rule | null>(null);
   const [offerApply, setOfferApply] = useState<Rule | null>(null);
   const [reapplying, setReapplying] = useState<Rule | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState<"delete" | "go-live" | "reapply" | null>(
     null,
   );
@@ -411,7 +411,7 @@ export default function Rules() {
         );
       else toast.success(`Applied ${r.applied} planned action(s) on ${r.emails} email(s)`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
     await load();
   };
@@ -429,7 +429,7 @@ export default function Rules() {
       toast.success(dryRun ? `"${rule.name}" back to dry-run` : `"${rule.name}" is LIVE`);
       if (!dryRun && updated.pending_planned > 0) setOfferApply(updated);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
     await load();
   };
@@ -445,7 +445,7 @@ export default function Rules() {
         toast.success(`Reapplied "${rule.name}": ${r.matched} email(s) re-planned`);
       else toast.success(`Reapplied "${rule.name}": ${r.applied} of ${r.matched} executed`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
     await load();
   };
@@ -463,7 +463,7 @@ export default function Rules() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -492,24 +492,10 @@ export default function Rules() {
     id == null ? "any" : (categories.find((c) => c.id === id)?.name ?? `#${id}`);
 
   const selectable = rules.filter((r) => !r.is_default);
-  const allChecked = selectable.length > 0 && selectable.every((r) => selectedIds.has(r.id));
-  const someChecked = selectable.some((r) => selectedIds.has(r.id));
-  const selectAllRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (selectAllRef.current)
-      selectAllRef.current.indeterminate = someChecked && !allChecked;
-  }, [someChecked, allChecked]);
-
-  const toggleSelect = (id: number) =>
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  const selectAll = () => setSelectedIds(new Set(selectable.map((r) => r.id)));
-  const clearSelection = () => setSelectedIds(new Set());
+  const {
+    selectedIds, allChecked, selectAllRef,
+    toggle: toggleSelect, selectAll, clear: clearSelection,
+  } = useSelection(selectable, (r) => r.id);
 
   const doBulkUpdate = async (patch: { enabled?: boolean; dry_run?: boolean }) => {
     const ids = Array.from(selectedIds);
@@ -519,7 +505,7 @@ export default function Rules() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -531,7 +517,7 @@ export default function Rules() {
       clearSelection();
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 

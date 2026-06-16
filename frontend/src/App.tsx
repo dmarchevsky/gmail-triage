@@ -231,15 +231,20 @@ export default function App() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
 
+  // Heartbeat: status only. Settings change only on explicit user save, so the
+  // 15s poll below uses this rather than refetching /settings every tick.
+  const refreshStatus = useCallback(async () => {
+    setStatus(await get<StatusResponse>("/status"));
+  }, []);
+
   const refresh = useCallback(async () => {
-    const s = await get<StatusResponse>("/status");
-    setStatus(s);
+    await refreshStatus();
     try {
       setSettings(await get<Settings>("/settings"));
     } catch {
       /* not authed yet */
     }
-  }, []);
+  }, [refreshStatus]);
 
   useEffect(() => {
     get<{ authenticated: boolean }>("/auth/session")
@@ -249,10 +254,10 @@ export default function App() {
 
   useEffect(() => {
     if (!authed) return;
-    refresh();
-    const id = setInterval(refresh, 15000);
+    refresh(); // initial load: status + settings
+    const id = setInterval(refreshStatus, 15000); // heartbeat: status only
     return () => clearInterval(id);
-  }, [authed, refresh]);
+  }, [authed, refresh, refreshStatus]);
 
   if (authed === null) return <p className="center-note">Loading…</p>;
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;

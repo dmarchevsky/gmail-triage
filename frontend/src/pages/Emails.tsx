@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, EmailAction, EmailList, EmailRow, StatusResponse, get, post } from "../api";
+import { Category, EmailAction, EmailList, EmailRow, StatusResponse, errMsg, get, post } from "../api";
 import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
@@ -55,7 +55,7 @@ function FeedbackForm({
             toast.success("Feedback recorded — see the Feedback page for proposals");
             onDone();
           } catch (e) {
-            toast.error(e instanceof Error ? e.message : String(e));
+            toast.error(errMsg(e));
           }
         }}
       >
@@ -184,7 +184,7 @@ function EmailDetail({
               toast.success("Queued for reclassification — watch for status updates");
               onChanged();
             } catch (e) {
-              toast.error(e instanceof Error ? e.message : String(e));
+              toast.error(errMsg(e));
             }
           }}
         >
@@ -228,15 +228,22 @@ export default function Emails() {
   const [allMatchingSelected, setAllMatchingSelected] = useState(false);
   const [bulkConfirm, setBulkConfirm] = useState<"reclassify" | null>(null);
 
-  const load = useCallback(async () => {
+  // Single source of truth for the list filters, shared by the paginated list
+  // and select-all-across-pages so the two can never select different sets.
+  const filterParams = useCallback(() => {
     const params = new URLSearchParams();
-    params.set("page", String(page));
     if (filters.category_id) params.set("category_id", filters.category_id);
     if (filters.status) params.set("status", filters.status);
     if (filters.period_hours) params.set("received_within_hours", filters.period_hours);
     if (filters.q) params.set("q", filters.q);
+    return params;
+  }, [filters]);
+
+  const load = useCallback(async () => {
+    const params = filterParams();
+    params.set("page", String(page));
     setList(await get<EmailList>(`/emails?${params.toString()}`));
-  }, [page, filters]);
+  }, [page, filterParams]);
 
   useEffect(() => {
     load();
@@ -252,6 +259,7 @@ export default function Emails() {
   const [classifying, setClassifying] = useState(false);
   const [pending, setPending] = useState(0);
   const wasRunning = useRef(false);
+  const lastPending = useRef<number | null>(null);
   useEffect(() => {
     const tick = async () => {
       try {
@@ -259,7 +267,12 @@ export default function Emails() {
         const running = st.classifier.running || st.classifier.pending_emails > 0;
         setClassifying(running);
         setPending(st.classifier.pending_emails);
-        if (running || wasRunning.current) await load();
+        // Reload the (full) list only when progress actually happened — the
+        // pending count moved — or once when work just finished, instead of on
+        // every 4s tick for the whole duration.
+        const changed = lastPending.current !== st.classifier.pending_emails;
+        if ((running && changed) || (!running && wasRunning.current)) await load();
+        lastPending.current = st.classifier.pending_emails;
         wasRunning.current = running;
       } catch {
         /* transient */
@@ -296,16 +309,12 @@ export default function Emails() {
 
   const selectAllMatching = async () => {
     try {
-      const params = new URLSearchParams();
-      if (filters.category_id) params.set("category_id", filters.category_id);
-      if (filters.status) params.set("status", filters.status);
-      if (filters.period_hours) params.set("received_within_hours", filters.period_hours);
-      if (filters.q) params.set("q", filters.q);
+      const params = filterParams();
       const result = await get<{ ids: number[] }>(`/emails/ids?${params.toString()}`);
       setSelectedIds(new Set(result.ids));
       setAllMatchingSelected(true);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -320,7 +329,7 @@ export default function Emails() {
       clearSelection();
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -335,7 +344,7 @@ export default function Emails() {
       clearSelection();
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 

@@ -131,17 +131,21 @@ async def _execute_action_set(client: GmailClient, label_cache: dict,
 
 
 async def apply_rules_to_email(session: Session, client: GmailClient | None,
-                               email: Email, rules: list[Rule]) -> int:
+                               email: Email, rules: list[Rule],
+                               label_cache: dict | None = None) -> int:
     """Evaluate rules, persist EmailAction rows. Each rule carries its own
     dry_run flag: live rules execute against Gmail, dry rules only record
     planned actions; one email may get a mix.
 
     All Gmail awaits happen with a clean session, and all DB mutations land in
-    one short transaction at the end.
+    one short transaction at the end. Callers processing many emails may pass a
+    shared ``label_cache`` to reuse resolved Gmail label ids across calls.
     """
     planned = evaluate_rules(rules, email)
     if not planned:
         return 0
+    if label_cache is None:
+        label_cache = {}
 
     # Phase 1: resolve target Labels (reads only; session stays clean).
     labels: list[Label | None] = [_label_for_action(session, action)
@@ -151,14 +155,17 @@ async def apply_rules_to_email(session: Session, client: GmailClient | None,
             for (rule, action), label in zip(planned, labels, strict=True)
             if not rule.dry_run]
 
-    # Phase 2: execute the live subset before touching the session.
-    live_ok = bool(live)
+    # Phase 2: execute the live subset before touching the session. live_ok
+    # stays False unless an execution actually succeeds — so live rules with no
+    # client are recorded as planned, never as executed.
+    live_ok = False
     exec_error: str | None = None
     if live and client is not None:
         try:
             await _execute_action_set(
-                client, {}, session, email.gmail_message_id,
+                client, label_cache, session, email.gmail_message_id,
                 [a for _, a, _n in live], [n for _, _a, n in live])
+            live_ok = True
         except Exception as e:
             live_ok = False
             exec_error = str(e)[:500]

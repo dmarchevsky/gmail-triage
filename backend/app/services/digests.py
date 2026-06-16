@@ -10,7 +10,7 @@ keep emails eligible.
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
@@ -33,15 +33,13 @@ DIGEST_MAX_CHARS = 3500  # synthesis budget; final message may add metadata/link
 
 
 def eligible_emails(session: Session, digest: Digest) -> list[Email]:
-    prior_runs = session.scalars(select(DigestRun).where(
-        DigestRun.digest_id == digest.id,
-        DigestRun.status == DigestRunStatus.success.value))
-    prior_ids: set[int] = set()
-    last_success: datetime | None = None
-    for run in prior_runs:
-        prior_ids.update(run.email_ids or [])
-        if last_success is None or (run.started_at and run.started_at > last_success):
-            last_success = run.started_at
+    # Last successful run time bounds the window; the received_at > last_success
+    # filter below excludes everything prior runs already covered, so there's no
+    # need to load every historical run's email_ids into memory.
+    last_success: datetime | None = session.scalar(
+        select(func.max(DigestRun.started_at)).where(
+            DigestRun.digest_id == digest.id,
+            DigestRun.status == DigestRunStatus.success.value))
 
     query = (select(Email)
              .where(Email.classification_id.in_(digest.category_ids or []),
@@ -54,8 +52,7 @@ def eligible_emails(session: Session, digest: Digest) -> list[Email]:
 
     out = []
     for email in session.scalars(query):
-        if email.id not in prior_ids:
-            out.append(email)
+        out.append(email)
         if len(out) >= digest.max_emails:
             break
     return out

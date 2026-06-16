@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Category, FeedbackItem, get, post } from "../api";
+import { Category, FeedbackItem, errMsg, get, post } from "../api";
 import { AsyncButton, Badge, DiffView, Modal, fmtDate } from "../components";
 import { useToast } from "../toast";
 
@@ -32,7 +32,7 @@ function ProposalReview({
       onDone();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 

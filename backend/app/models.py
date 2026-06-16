@@ -162,7 +162,6 @@ class Email(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     gmail_message_id: Mapped[str] = mapped_column(String(32), unique=True)
     gmail_thread_id: Mapped[str | None] = mapped_column(String(32))
-    history_id: Mapped[str | None] = mapped_column(String(64))
     received_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
     sender: Mapped[str | None] = mapped_column(String(512))
     sender_domain: Mapped[str | None] = mapped_column(String(255), index=True)
@@ -170,9 +169,8 @@ class Email(Base):
     snippet: Mapped[str | None] = mapped_column(Text)
     body_text: Mapped[str | None] = mapped_column(Text)  # only when store_bodies=true
     body_text_hash: Mapped[str | None] = mapped_column(String(64))
-    size_estimate: Mapped[int | None] = mapped_column(Integer)
     classification_id: Mapped[int | None] = mapped_column(
-        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True
     )
     confidence: Mapped[float | None] = mapped_column(Float)
     rationale: Mapped[str | None] = mapped_column(Text)
@@ -186,7 +184,7 @@ class Email(Base):
     error: Mapped[str | None] = mapped_column(Text)
     processing_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
     classification: Mapped[Category | None] = relationship()
     actions: Mapped[list["EmailAction"]] = relationship(
@@ -199,7 +197,8 @@ class EmailAction(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email_id: Mapped[int] = mapped_column(ForeignKey("emails.id", ondelete="CASCADE"))
-    rule_id: Mapped[int | None] = mapped_column(ForeignKey("rules.id", ondelete="SET NULL"))
+    rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rules.id", ondelete="SET NULL"), index=True)
     action_type: Mapped[str] = mapped_column(String(32))
     action_params: Mapped[dict | None] = mapped_column(JSON)
     executed: Mapped[bool] = mapped_column(Boolean, default=False)

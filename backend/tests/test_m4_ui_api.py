@@ -56,6 +56,27 @@ def test_email_filters(auth_client, dataset):
     assert first["gmail_message_id"] == "e4"
 
 
+def test_email_list_total_not_inflated_by_multiple_actions(auth_client, db_session):
+    """The paginated `total` must count an email once even when it has several
+    actions — the count path must not multiply rows via joinedload(actions)."""
+    cat = Category(name="Multi", criteria_md="m")
+    db_session.add(cat)
+    db_session.flush()
+    email = Email(gmail_message_id="multi1", sender="a@x.com", subject="multi",
+                  status="actioned", classification_id=cat.id, confidence=0.9)
+    db_session.add(email)
+    db_session.flush()
+    for atype in ("archive", "mark_read", "add_label"):
+        db_session.add(EmailAction(email_id=email.id, action_type=atype,
+                                   executed=True, dry_run=False))
+    db_session.commit()
+
+    body = auth_client.get("/api/v1/emails").json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert len(body["items"][0]["actions"]) == 3
+
+
 def test_email_detail_includes_actions(auth_client, db_session, dataset):
     e2 = db_session.query(Email).filter_by(gmail_message_id="e2").one()
     detail = auth_client.get(f"/api/v1/emails/{e2.id}").json()
@@ -76,12 +97,6 @@ def test_stats(auth_client, dataset):
     assert any(a["event_type"] == "poll_completed" for a in stats["recent_activity"])
 
 
-def test_audit_log_endpoint(auth_client, dataset):
-    log = auth_client.get("/api/v1/audit-log?event_type=poll_completed").json()
-    assert log["total"] == 1
-    assert log["items"][0]["actor"] == "system"
-
-
 def test_timestamps_serialized_with_utc_offset(auth_client, db_session, dataset):
     """Naive-SQLite datetimes must come out tz-tagged so the browser parses
     them as UTC, not local (the 7-hours-ahead bug)."""
@@ -90,8 +105,6 @@ def test_timestamps_serialized_with_utc_offset(auth_client, db_session, dataset)
     assert detail["received_at"].endswith("+00:00")
     listed = auth_client.get("/api/v1/emails").json()["items"]
     assert all(i["received_at"].endswith("+00:00") for i in listed if i["received_at"])
-    log = auth_client.get("/api/v1/audit-log").json()["items"]
-    assert all(r["ts"].endswith("+00:00") for r in log if r["ts"])
 
 
 def test_utc_datetime_roundtrip_normalizes_aware_writes(db_session):

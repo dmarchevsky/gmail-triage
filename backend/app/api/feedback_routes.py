@@ -73,12 +73,17 @@ async def create_feedback(email_id: int, body: FeedbackIn,
 @router.get("/feedback")
 def list_feedback(status: str | None = None,
                   session: Session = Depends(get_session)) -> list[dict]:
-    query = select(Feedback).options(joinedload(Feedback.email))
+    # Warm the Category identity map once so the per-row serialize() lookups
+    # below resolve from memory instead of issuing a query each.
+    session.scalars(select(Category)).all()
+    query = select(Feedback).options(
+        joinedload(Feedback.email).joinedload(Email.classification))
     if status:
         if status not in [s.value for s in FeedbackStatus]:
             raise HTTPException(status_code=400, detail="Invalid status")
         query = query.where(Feedback.status == status)
-    rows = list(session.scalars(query.order_by(Feedback.created_at.desc())))
+    rows = list(session.scalars(
+        query.order_by(Feedback.created_at.desc()).limit(500)))
 
     # Map each covered feedback id -> the representative that covers it, so the
     # UI can show one consolidated proposal and mark the rest as merged.

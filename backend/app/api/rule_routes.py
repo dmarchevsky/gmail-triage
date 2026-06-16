@@ -1,5 +1,7 @@
 """Rules CRUD, reorder, and dry test against recent classified emails."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
@@ -51,11 +53,14 @@ def _validate_label_ids(session: Session, actions: list[dict]) -> None:
                             detail=f"Unknown label id(s): {sorted(missing)}")
 
 
-def serialize(r: Rule, session: Session) -> dict:
+def serialize(r: Rule, session: Session, *,
+              pending_planned: int | None = None,
+              label_map: dict[int, Label] | None = None) -> dict:
     # enrich label actions with the label's name + color for the UI
-    label_ids = {a["label_id"] for a in (r.actions or []) if a.get("label_id")}
-    label_map = {lb.id: lb for lb in session.scalars(
-        select(Label).where(Label.id.in_(label_ids)))} if label_ids else {}
+    if label_map is None:
+        label_ids = {a["label_id"] for a in (r.actions or []) if a.get("label_id")}
+        label_map = {lb.id: lb for lb in session.scalars(
+            select(Label).where(Label.id.in_(label_ids)))} if label_ids else {}
     actions = []
     for a in r.actions or []:
         a = dict(a)
@@ -65,6 +70,8 @@ def serialize(r: Rule, session: Session) -> dict:
             a["text_color"] = lb.text_color
             a["background_color"] = lb.background_color
         actions.append(a)
+    if pending_planned is None:
+        pending_planned = _pending_planned(session, r.id)
     return {
         "id": r.id, "name": r.name, "enabled": r.enabled, "priority": r.priority,
         "match_category_id": r.match_category_id,
@@ -72,15 +79,29 @@ def serialize(r: Rule, session: Session) -> dict:
         "match_sender_pattern": r.match_sender_pattern,
         "actions": actions, "stop_processing": r.stop_processing,
         "dry_run": r.dry_run, "is_default": r.is_default,
-        "pending_planned": _pending_planned(session, r.id),
+        "pending_planned": pending_planned,
     }
 
 
 @router.get("")
 def list_rules(session: Session = Depends(get_session)) -> list[dict]:
-    return [serialize(r, session) for r in
-            session.scalars(
-                select(Rule).order_by(Rule.is_default, Rule.priority, Rule.id))]
+    rules = list(session.scalars(
+        select(Rule).order_by(Rule.is_default, Rule.priority, Rule.id)))
+    rule_ids = [r.id for r in rules]
+    # Batch the pending-planned counts and label lookups into one query each
+    # instead of a COUNT + Label SELECT per rule.
+    pending = {rid: cnt for rid, cnt in session.execute(
+        select(EmailAction.rule_id, func.count(EmailAction.id))
+        .where(EmailAction.rule_id.in_(rule_ids),
+               EmailAction.dry_run.is_(True),
+               EmailAction.executed.is_(False))
+        .group_by(EmailAction.rule_id))} if rule_ids else {}
+    label_ids = {a["label_id"] for r in rules for a in (r.actions or [])
+                 if a.get("label_id")}
+    label_map = {lb.id: lb for lb in session.scalars(
+        select(Label).where(Label.id.in_(label_ids)))} if label_ids else {}
+    return [serialize(r, session, pending_planned=pending.get(r.id, 0),
+                      label_map=label_map) for r in rules]
 
 
 @router.post("", status_code=201)
@@ -229,27 +250,14 @@ def reorder(body: ReorderBody, session: Session = Depends(get_session)) -> list[
 @router.post("/{rule_id}/apply-planned")
 async def apply_planned(rule_id: int, session: Session = Depends(get_session)) -> dict:
     """Execute this (now live) rule's previously planned dry-run actions."""
-    from app.services import settings_service
-    from app.services.gmail import GmailAuthError, GmailClient
-
     rule = session.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
     if rule.dry_run:
         raise HTTPException(status_code=409,
                             detail="Rule is still in dry-run; switch it to live first")
-    client_secret = settings_service.get_setting(session, "gmail_client_secret_json")
-    if not client_secret:
-        raise HTTPException(status_code=409, detail="Gmail is not connected")
-    try:
-        client = GmailClient(session, client_secret)
-    except GmailAuthError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    try:
-        result = await rules_engine.apply_planned_for_rule(session, client, rule)
-    finally:
-        await client.aclose()
-    return result
+    async with _gmail_client_cm(session, required=True) as client:
+        return await rules_engine.apply_planned_for_rule(session, client, rule)
 
 
 def _gmail_client(session: Session):
@@ -266,6 +274,18 @@ def _gmail_client(session: Session):
         raise HTTPException(status_code=409, detail=str(e)) from e
 
 
+@asynccontextmanager
+async def _gmail_client_cm(session: Session, *, required: bool):
+    """Yield a Gmail client (or None when not required) and always close it —
+    the shared open/try-finally lifecycle for the apply/reapply endpoints."""
+    client = _gmail_client(session) if required else None
+    try:
+        yield client
+    finally:
+        if client is not None:
+            await client.aclose()
+
+
 @router.post("/{rule_id}/reapply")
 async def reapply_rule_route(rule_id: int,
                              session: Session = Depends(get_session)) -> dict:
@@ -273,13 +293,8 @@ async def reapply_rule_route(rule_id: int,
     rule = session.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
-    client = _gmail_client(session) if not rule.dry_run else None
-    try:
-        result = await rules_engine.reapply_rule(session, client, rule)
-    finally:
-        if client is not None:
-            await client.aclose()
-    return result
+    async with _gmail_client_cm(session, required=not rule.dry_run) as client:
+        return await rules_engine.reapply_rule(session, client, rule)
 
 
 @router.post("/reapply-bulk")
@@ -291,16 +306,13 @@ async def reapply_bulk(body: BulkRuleIds,
     rules = list(session.scalars(
         select(Rule).where(Rule.id.in_(body.rule_ids))
         .order_by(Rule.is_default, Rule.priority, Rule.id)))
-    client = _gmail_client(session) if any(not r.dry_run for r in rules) else None
+    required = any(not r.dry_run for r in rules)
     totals = {"rules": 0, "matched": 0, "applied": 0, "failed": 0}
-    try:
+    async with _gmail_client_cm(session, required=required) as client:
         for rule in rules:
             result = await rules_engine.reapply_rule(session, client, rule)
             totals["rules"] += 1
             totals["matched"] += result["matched"]
             totals["applied"] += result["applied"]
             totals["failed"] += result["failed"]
-    finally:
-        if client is not None:
-            await client.aclose()
     return totals

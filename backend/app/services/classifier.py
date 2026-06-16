@@ -99,15 +99,21 @@ async def summarize_email(email: Email, body: str, settings: dict) -> None:
         log.warning("email_summary_failed", email_id=email.id, error=str(e))
 
 
-async def fetch_body(session: Session, client: GmailClient, email: Email) -> str:
-    """Body text for an email: stored copy if retained, else fetch from Gmail."""
+async def fetch_body(session: Session, client: GmailClient, email: Email,
+                     store_bodies: bool | None = None) -> str:
+    """Body text for an email: stored copy if retained, else fetch from Gmail.
+
+    Callers that already hold the settings dict should pass `store_bodies` to
+    avoid a per-email settings query; otherwise it is read from the DB."""
     from app.services import gmail
     if email.body_text is not None:
         return email.body_text
     msg = await client.get_message_full(email.gmail_message_id)
     body = gmail.extract_body_text(msg.get("payload", {}))
     email.body_text_hash = gmail.body_hash(body)
-    if bool(settings_service.get_setting(session, "store_bodies")):
+    if store_bodies is None:
+        store_bodies = bool(settings_service.get_setting(session, "store_bodies"))
+    if store_bodies:
         email.body_text = body
     return body
 
@@ -116,10 +122,15 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
                          categories: list[Category], settings: dict) -> None:
     email.attempts = (email.attempts or 0) + 1
     try:
-        body = await fetch_body(session, client, email)
+        body = await fetch_body(session, client, email,
+                                store_bodies=bool(settings.get("store_bodies")))
     except GmailNotFound:
         email.status = EmailStatus.error.value
         email.error = "Message no longer available in Gmail"
+        # A 404 is a deterministic permanent failure — park attempts at the cap
+        # so the recovery sweep doesn't retry it (and re-hit Gmail) every cycle.
+        email.attempts = max(email.attempts or 0,
+                             int(settings.get("classify_max_attempts") or 5))
         return
     session.commit()  # release the body-hash write before the LLM await
     system, user, schema = build_classification_prompt(
@@ -223,8 +234,6 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
         raise GmailAuthError("Gmail is not connected")
     client = GmailClient(session, client_secret)
     app_state.classifier_running = True
-    app_state.classifier_done = 0
-    app_state.classifier_total = len(pending)
     try:
         for email in pending:
             try:
@@ -236,7 +245,6 @@ async def classify_pending(session: Session, limit: int = 50) -> dict:
                 email.processing_started_at = None
                 session.commit()
                 break
-            app_state.classifier_done += 1
             if email.status == EmailStatus.pending.value:
                 continue  # no categories to classify against
             if email.status == EmailStatus.skipped.value:

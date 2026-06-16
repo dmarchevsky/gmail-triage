@@ -93,10 +93,14 @@ def test_active_summary_prompt_tracks_depth():
     assert settings_service.active_summary_prompt(base) == base["prompt_summary_concise"]
 
 
-def test_audit_log_never_contains_secret_values(auth_client):
+def test_audit_log_never_contains_secret_values(auth_client, db_session):
+    from app.models import AuditLog
+
     auth_client.put("/api/v1/settings", json={"telegram_bot_token": "999:topsecret"})
-    log = auth_client.get("/api/v1/audit-log").json()
-    assert "topsecret" not in json.dumps(log)
+    rows = db_session.query(AuditLog).all()
+    dumped = json.dumps([{"actor": r.actor, "event_type": r.event_type,
+                          "payload": r.payload} for r in rows])
+    assert "topsecret" not in dumped
 
 
 def test_log_snippet_truncation():

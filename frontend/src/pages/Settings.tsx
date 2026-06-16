@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GmailLabel, Settings, del, get, post, put } from "../api";
+import { GmailLabel, Settings, del, errMsg, get, post, put } from "../api";
 import { AsyncButton, Badge, ConfirmDialog } from "../components";
 import { useToast } from "../toast";
 import { useApp } from "../App";
@@ -16,10 +16,17 @@ function MailboxScope({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>(settings.poll_scope_labels);
 
+  // Re-sync from the prop when the persisted scope actually changes (e.g. after
+  // a save/import elsewhere) — keyed on the joined value so an unrelated parent
+  // re-render doesn't reset an in-progress selection.
+  useEffect(() => {
+    setSelected(settings.poll_scope_labels);
+  }, [settings.poll_scope_labels.join(",")]);
+
   useEffect(() => {
     get<GmailLabel[]>("/gmail/labels")
       .then(setLabels)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(errMsg(e)));
   }, []);
 
   const toggle = (id: string) =>
@@ -86,7 +93,7 @@ export function GmailConnect({ onChange }: { onChange?: () => void }) {
       });
       window.location.href = r.auth_url;
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -189,7 +196,7 @@ function AuthSection({
       setConfirm("");
       await onChange();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -199,7 +206,7 @@ function AuthSection({
       toast.success("Password authentication enabled");
       await onChange();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -297,7 +304,7 @@ function AuthSection({
               toast.success("Password authentication disabled");
               await onChange();
             } catch (e) {
-              toast.error(e instanceof Error ? e.message : String(e));
+              toast.error(errMsg(e));
             }
           }}
           onCancel={() => {
@@ -340,7 +347,7 @@ export default function SettingsPage() {
       toast.success("Settings saved");
       await refresh();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errMsg(e));
     }
   };
 
@@ -718,7 +725,7 @@ export default function SettingsPage() {
               );
               await refresh();
             } catch (e) {
-              toast.error(e instanceof Error ? e.message : String(e));
+              toast.error(errMsg(e));
             }
           }}
           onCancel={() => setConfirmingPurge(false)}
@@ -744,7 +751,7 @@ export default function SettingsPage() {
               toast.success("Factory reset complete");
               await refresh();
             } catch (e) {
-              toast.error(e instanceof Error ? e.message : String(e));
+              toast.error(errMsg(e));
             }
           }}
           onCancel={() => setConfirmingReset(false)}

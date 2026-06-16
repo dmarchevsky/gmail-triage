@@ -15,6 +15,7 @@ backend/static/
 *.egg-info/
 dist/
 # database backups / dumps (may contain encrypted secrets)
+backups/
 *-backup-*.db
 *-backup-*.sql.gz
 *.sql.gz

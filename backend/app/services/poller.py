@@ -55,12 +55,19 @@ def _scope_labels(session: Session) -> set[str]:
     return set(settings_service.get_setting(session, "poll_scope_labels") or [])
 
 
+def _existing_message_ids(session: Session, ids: list[str]) -> set[str]:
+    """One IN-query returning which of `ids` are already ingested."""
+    if not ids:
+        return set()
+    return set(session.scalars(
+        select(Email.gmail_message_id).where(Email.gmail_message_id.in_(ids))))
+
+
 async def _persist_message(session: Session, client: GmailClient, message_id: str,
                            own_addresses: set[str], scope: set[str]) -> bool:
-    """Fetch + store one message. Returns True if a new row was created."""
-    existing = session.scalar(select(Email).where(Email.gmail_message_id == message_id))
-    if existing is not None:
-        return False
+    """Fetch + stage one new message into the session (no existence check, no
+    commit — callers pre-filter known ids and commit per page). Returns True if
+    a row was added."""
     try:
         msg = await client.get_message_metadata(message_id)
     except GmailNotFound:
@@ -76,11 +83,27 @@ async def _persist_message(session: Session, client: GmailClient, message_id: st
     if any(own in sender_addr for own in own_addresses):
         return False
     session.add(Email(**meta, status=EmailStatus.pending.value, dry_run=False))
-    session.commit()
     log.info("email_ingested", gmail_message_id=message_id,
              sender_domain=meta["sender_domain"],
              snippet=truncate_snippet(meta["snippet"]))
     return True
+
+
+async def _ingest_new_ids(session: Session, client: GmailClient, ids: list[str],
+                          own: set[str], scope: set[str]) -> int:
+    """Batch-filter already-known ids, stage the rest, commit once. Dedups
+    within the page so the unique gmail_message_id constraint can't trip."""
+    known = _existing_message_ids(session, ids)
+    new_count = 0
+    seen: set[str] = set()
+    for mid in ids:
+        if mid in known or mid in seen:
+            continue
+        seen.add(mid)
+        if await _persist_message(session, client, mid, own, scope):
+            new_count += 1
+    session.commit()
+    return new_count
 
 
 async def _baseline_sync(session: Session, client: GmailClient) -> int:
@@ -94,9 +117,8 @@ async def _baseline_sync(session: Session, client: GmailClient) -> int:
         page_token = None
         while True:
             page = await client.list_messages(q=q, page_token=page_token)
-            for ref in page.get("messages", []):
-                if await _persist_message(session, client, ref["id"], own, scope):
-                    new_count += 1
+            ids = [ref["id"] for ref in page.get("messages", [])]
+            new_count += await _ingest_new_ids(session, client, ids, own, scope)
             page_token = page.get("nextPageToken")
             if not page_token:
                 break
@@ -116,11 +138,10 @@ async def _incremental_sync(session: Session, client: GmailClient,
     while True:
         page = await client.list_history(start_history_id, page_token=page_token)
         latest_history_id = str(page.get("historyId", latest_history_id))
-        for record in page.get("history", []):
-            for added in record.get("messagesAdded", []):
-                if await _persist_message(session, client, added["message"]["id"],
-                                          own, scope):
-                    new_count += 1
+        ids = [added["message"]["id"]
+               for record in page.get("history", [])
+               for added in record.get("messagesAdded", [])]
+        new_count += await _ingest_new_ids(session, client, ids, own, scope)
         page_token = page.get("nextPageToken")
         if not page_token:
             break
