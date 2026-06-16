@@ -395,3 +395,17 @@ def test_gmail_labels_endpoint(auth_client, connected):
     by_id = {x["id"]: x for x in out}
     assert by_id["CATEGORY_PROMOTIONS"]["display_name"] == "Promotions"
     assert by_id["Label_7"]["display_name"] == "Work" and by_id["Label_7"]["type"] == "user"
+
+
+def test_poll_failure_is_audited(db_session):
+    """A poll failure writes a poll_failed audit row so it surfaces in Recent activity."""
+    from app.models import AuditLog
+    from app.services.poller import _record_poll_failure
+
+    _record_poll_failure(db_session, "boom: gmail unreachable", kind="auth")
+
+    rows = db_session.query(AuditLog).filter(AuditLog.event_type == "poll_failed").all()
+    assert len(rows) == 1
+    assert rows[0].actor == "system"
+    assert rows[0].payload["error"] == "boom: gmail unreachable"
+    assert rows[0].payload["kind"] == "auth"

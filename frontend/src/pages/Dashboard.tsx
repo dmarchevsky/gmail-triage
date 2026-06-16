@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LlmQueue, Stats, get, post } from "../api";
 import { AsyncButton, Badge, fmtDate } from "../components";
 import { describeActivity, eventLabel } from "../activity";
@@ -19,6 +19,17 @@ export default function Dashboard() {
 
   const load = () => get<Stats>("/stats").then(setStats);
   const loadQueue = () => get<LlmQueue>("/llm/queue").then(setQueue);
+
+  // Surface poller errors as a transient toast (and rely on Recent activity for
+  // the durable record) instead of a persistent page banner. Fire only when the
+  // error string changes, not on every 15s status refresh.
+  const lastErrSeen = useRef<string | null>(null);
+  useEffect(() => {
+    const err = status?.poller.last_error ?? null;
+    if (err && err !== lastErrSeen.current) toast.error(`Poller error: ${err}`);
+    lastErrSeen.current = err;
+  }, [status?.poller.last_error, toast]);
+
   useEffect(() => {
     load();
     const id = setInterval(load, 20000);
@@ -72,10 +83,6 @@ export default function Dashboard() {
           from the Rules page.
         </p>
       )}
-      {status?.poller.last_error && (
-        <p className="error">Last poller error: {status.poller.last_error}</p>
-      )}
-
       {stats && (
         <>
           <div className="cards">
