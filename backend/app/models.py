@@ -176,6 +176,9 @@ class Email(Base):
     )
     confidence: Mapped[float | None] = mapped_column(Float)
     rationale: Mapped[str | None] = mapped_column(Text)
+    # Plain-text summary saved at classification time (depth-configurable); the
+    # source digests are built from. NULL for emails classified by a hard rule.
+    summary: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(String(128))
     classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     status: Mapped[str] = mapped_column(String(16), default=EmailStatus.pending.value, index=True)
@@ -258,8 +261,6 @@ class Digest(Base):
     include_metadata: Mapped[bool] = mapped_column(Boolean, default=True)
     max_emails: Mapped[int] = mapped_column(Integer, default=50)
     send_no_news: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Detail level: 1 brief (snippet-only, terse) · 2 standard · 3 detailed.
-    depth: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)

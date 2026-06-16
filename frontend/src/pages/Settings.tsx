@@ -350,8 +350,7 @@ export default function SettingsPage() {
   ];
 
   const llmFields: [keyof Settings, string, string][] = [
-    ["classify_body_max_chars", "Classification body budget (chars)", "2000"],
-    ["digest_body_max_chars", "Digest body budget (chars/email)", "6000"],
+    ["classify_body_max_chars", "Body budget (chars; classify + summarize)", "2000"],
     ["llm_classify_timeout_seconds", "LLM classify timeout (s)", "120"],
     ["llm_digest_timeout_seconds", "LLM digest timeout (s)", "300"],
     ["llm_max_concurrency", "LLM max in-flight requests", "1"],
@@ -362,7 +361,17 @@ export default function SettingsPage() {
         : "LLM max context (tokens; 0 = auto)",
       "0",
     ],
-    ["digest_micro_batch_size", "Digest emails per summary call", "5"],
+  ];
+
+  const promptFields: [keyof Settings, string][] = [
+    ["prompt_classification_system", "Email classification — system prompt"],
+    ["prompt_summary_concise", "Email summary — concise depth"],
+    ["prompt_summary_default", "Email summary — default depth"],
+    ["prompt_summary_extended", "Email summary — extended depth"],
+    [
+      "prompt_digest_synthesis",
+      "Digest synthesis (used when digest mode = synthesize; {max_chars} is substituted)",
+    ],
   ];
 
   return (
@@ -462,6 +471,27 @@ export default function SettingsPage() {
               />
             </label>
           ))}
+          <label>
+            Summarization depth (applied to newly-classified emails)
+            <select
+              value={settings.summarization_depth}
+              onChange={(e) => saveValues({ summarization_depth: e.target.value })}
+            >
+              <option value="concise">Concise — one short line</option>
+              <option value="default">Default — 1-2 sentences</option>
+              <option value="extended">Extended — short paragraph</option>
+            </select>
+          </label>
+          <label>
+            Digest mode
+            <select
+              value={settings.digest_mode}
+              onChange={(e) => saveValues({ digest_mode: e.target.value })}
+            >
+              <option value="assemble">Assemble — list saved summaries (no LLM)</option>
+              <option value="synthesize">Synthesize — one LLM call combines them</option>
+            </select>
+          </label>
         </div>
         <div className="head-actions">
           <button
@@ -489,6 +519,33 @@ export default function SettingsPage() {
             Test LLM connection
           </AsyncButton>
         </div>
+      </div>
+
+      <div className="settings-section">
+        <h3>LLM Prompts</h3>
+        <div className="form-grid">
+          {promptFields.map(([key, label]) => (
+            <label key={key} className="span2">
+              {label}
+              <textarea
+                rows={5}
+                value={num(key)}
+                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+              />
+            </label>
+          ))}
+        </div>
+        <button
+          className="primary"
+          onClick={() => {
+            const values: Record<string, unknown> = {};
+            for (const [key] of promptFields)
+              if (draft[key] !== undefined) values[key] = draft[key];
+            saveValues(values);
+          }}
+        >
+          Save prompts
+        </button>
       </div>
 
       <div className="settings-section">

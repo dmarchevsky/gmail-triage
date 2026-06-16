@@ -138,6 +138,7 @@ export interface EmailRow {
   dry_run: boolean;
   actions: EmailAction[];
   rationale?: string | null;
+  summary?: string | null;
   llm_model?: string | null;
   classified_at?: string | null;
   error?: string | null;
@@ -169,14 +170,19 @@ export interface Settings {
   initial_lookback_hours: number;
   store_bodies: boolean;
   classify_body_max_chars: number;
-  digest_body_max_chars: number;
   llm_base_url: string;
   llm_model: string;
   llm_classify_timeout_seconds: number;
   llm_digest_timeout_seconds: number;
   llm_max_concurrency: number;
   llm_max_context_tokens: number;
-  digest_micro_batch_size: number;
+  summarization_depth: string;
+  digest_mode: string;
+  prompt_classification_system: string;
+  prompt_summary_concise: string;
+  prompt_summary_default: string;
+  prompt_summary_extended: string;
+  prompt_digest_synthesis: string;
   telegram_bot_token_configured: boolean;
   telegram_default_chat_id: string;
   gmail_client_secret_json_configured: boolean;
@@ -214,7 +220,6 @@ export interface Digest {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
-  depth: number;
   last_run: DigestLastRun | null;
 }
 

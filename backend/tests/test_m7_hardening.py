@@ -54,6 +54,45 @@ def test_settings_import_roundtrip(auth_client):
     assert auth_client.get("/api/v1/settings").json()["poll_interval_seconds"] == 600
 
 
+def test_prompt_settings_default_to_disk_and_roundtrip(auth_client):
+    """Editable prompts default to the on-disk prompt files and persist on save;
+    summarization depth / digest mode round-trip."""
+    from app.services.settings_service import _prompt_file
+
+    settings = auth_client.get("/api/v1/settings").json()
+    assert settings["prompt_classification_system"] == \
+        _prompt_file("classification_system.txt")
+    assert settings["prompt_digest_synthesis"] == _prompt_file("digest_synthesis_system.txt")
+    assert settings["summarization_depth"] == "default"
+    assert settings["digest_mode"] == "assemble"
+
+    auth_client.put("/api/v1/settings", json={
+        "prompt_summary_concise": "Custom concise prompt.",
+        "summarization_depth": "extended",
+        "digest_mode": "synthesize"})
+    updated = auth_client.get("/api/v1/settings").json()
+    assert updated["prompt_summary_concise"] == "Custom concise prompt."
+    assert updated["summarization_depth"] == "extended"
+    assert updated["digest_mode"] == "synthesize"
+
+
+def test_removed_settings_rejected(auth_client):
+    """The retired batch-size / digest-body knobs are no longer valid keys."""
+    for key in ("digest_micro_batch_size", "digest_body_max_chars"):
+        resp = auth_client.put("/api/v1/settings", json={key: 7})
+        assert resp.status_code >= 400
+
+
+def test_active_summary_prompt_tracks_depth():
+    from app.services import settings_service
+
+    base = dict(settings_service.DEFAULTS)
+    base["summarization_depth"] = "extended"
+    assert settings_service.active_summary_prompt(base) == base["prompt_summary_extended"]
+    base["summarization_depth"] = "concise"
+    assert settings_service.active_summary_prompt(base) == base["prompt_summary_concise"]
+
+
 def test_audit_log_never_contains_secret_values(auth_client):
     auth_client.put("/api/v1/settings", json={"telegram_bot_token": "999:topsecret"})
     log = auth_client.get("/api/v1/audit-log").json()

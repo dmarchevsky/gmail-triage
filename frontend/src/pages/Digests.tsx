@@ -23,7 +23,6 @@ interface DigestForm {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
-  depth: number;
 }
 
 function DigestEditor({
@@ -51,7 +50,6 @@ function DigestEditor({
     include_metadata: digest?.include_metadata ?? true,
     max_emails: digest?.max_emails ?? 50,
     send_no_news: digest?.send_no_news ?? false,
-    depth: digest?.depth ?? 2,
   });
   const toggleCategory = (id: number) =>
     setForm({
@@ -141,17 +139,6 @@ function DigestEditor({
             value={form.max_emails}
             onChange={(e) => setForm({ ...form, max_emails: Number(e.target.value) })}
           />
-        </label>
-        <label>
-          Depth
-          <select
-            value={form.depth}
-            onChange={(e) => setForm({ ...form, depth: Number(e.target.value) })}
-          >
-            <option value={1}>Brief — snippets only, fastest</option>
-            <option value={2}>Standard — full bodies (default)</option>
-            <option value={3}>Detailed — longer, more specifics</option>
-          </select>
         </label>
         <label className="checkbox">
           <input

@@ -97,6 +97,8 @@ def test_no_write_lock_held_during_digest_llm_calls(auth_client, db_session):
 
     settings_service.set_setting(db_session, "telegram_bot_token", "123:abc")
     settings_service.set_setting(db_session, "telegram_default_chat_id", "5")
+    # Synthesize mode is the one that calls the LLM at digest time.
+    settings_service.set_setting(db_session, "digest_mode", "synthesize")
     cat = Category(name="MarketNews", criteria_md="m")
     db_session.add(cat)
     db_session.flush()

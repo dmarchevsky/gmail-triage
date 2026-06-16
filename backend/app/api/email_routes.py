@@ -42,6 +42,7 @@ def serialize_email(e: Email, detail: bool = False) -> dict:
         data.update({
             "gmail_thread_id": e.gmail_thread_id,
             "rationale": e.rationale,
+            "summary": e.summary,
             "llm_model": e.llm_model,
             "classified_at": e.classified_at.isoformat() if e.classified_at else None,
             "error": e.error,
@@ -155,6 +156,7 @@ async def reclassify_email(email_id: int,
     email.classification_id = None
     email.confidence = None
     email.rationale = None
+    email.summary = None
     email.error = None
     email.classified_at = None
     email.processing_started_at = None
@@ -191,6 +193,7 @@ async def reclassify_bulk(body: BulkEmailIds,
         email.classification_id = None
         email.confidence = None
         email.rationale = None
+        email.summary = None
         email.error = None
         email.classified_at = None
         email.processing_started_at = None

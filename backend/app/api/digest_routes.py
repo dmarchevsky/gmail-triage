@@ -27,7 +27,6 @@ class DigestIn(BaseModel):
     include_metadata: bool = True
     max_emails: int = Field(default=50, ge=1, le=500)
     send_no_news: bool = False
-    depth: int = Field(default=2, ge=1, le=3)  # 1 brief · 2 standard · 3 detailed
 
     @field_validator("cron_times")
     @classmethod
@@ -46,7 +45,7 @@ def serialize(d: Digest, last_run: dict | None = None) -> dict:
         "telegram_chat_id": d.telegram_chat_id,
         "include_links": d.include_links, "include_metadata": d.include_metadata,
         "max_emails": d.max_emails, "send_no_news": d.send_no_news,
-        "depth": d.depth, "last_run": last_run,
+        "last_run": last_run,
     }
 
 

@@ -120,6 +120,11 @@ function EmailDetail({
             <b>Rationale:</b> {email.rationale}
           </p>
         )}
+        {email.summary && (
+          <p className="rationale">
+            <b>Summary:</b> {email.summary}
+          </p>
+        )}
         {email.error && <p className="error">Error: {email.error}</p>}
 
         <h4>{email.dry_run ? "Planned actions (dry-run)" : "Actions"}</h4>

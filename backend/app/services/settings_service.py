@@ -4,6 +4,7 @@ Secrets (telegram bot token, gmail oauth client secret, ui password hash) are
 Fernet-encrypted at rest and never returned by GET /settings.
 """
 
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -18,12 +19,28 @@ SECRET_KEYS = {
     "ui_password_hash",
 }
 
+# Prompt defaults live as files under app/prompts/ so they can be version-
+# controlled and diffed; the stored setting (if any) overrides the file. We read
+# the file directly here rather than importing llm to avoid an import cycle.
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+
+def _prompt_file(name: str) -> str:
+    return (_PROMPTS_DIR / name).read_text()
+
+
+# Summarization depth → the setting key holding that depth's prompt.
+SUMMARY_DEPTH_PROMPTS = {
+    "concise": "prompt_summary_concise",
+    "default": "prompt_summary_default",
+    "extended": "prompt_summary_extended",
+}
+
 DEFAULTS: dict[str, Any] = {
     "poll_interval_seconds": 300,
     "initial_lookback_hours": 24,
     "store_bodies": False,
     "classify_body_max_chars": 2000,
-    "digest_body_max_chars": 6000,
     "llm_base_url": "",  # empty -> use env LLM_BASE_URL
     "llm_model": "",
     "llm_classify_timeout_seconds": 120,
@@ -33,8 +50,19 @@ DEFAULTS: dict[str, Any] = {
     # from it); detected from the llama.cpp /props endpoint and shown in the UI,
     # but the stored value here is authoritative once set.
     "llm_max_context_tokens": 0,
-    # Emails summarized per micro-summary LLM call (batched to cut round-trips).
-    "digest_micro_batch_size": 5,
+    # System-wide summarization depth applied when an email is summarized at
+    # classification time: concise · default · extended.
+    "summarization_depth": "default",
+    # How a digest is built from the saved per-email summaries:
+    #   "assemble"   — list the summaries verbatim, no LLM call.
+    #   "synthesize" — one LLM call combines them via prompt_digest_synthesis.
+    "digest_mode": "assemble",
+    # Editable LLM prompts (defaults seeded from the on-disk prompt files).
+    "prompt_classification_system": _prompt_file("classification_system.txt"),
+    "prompt_summary_concise": _prompt_file("summary_concise.txt"),
+    "prompt_summary_default": _prompt_file("summary_default.txt"),
+    "prompt_summary_extended": _prompt_file("summary_extended.txt"),
+    "prompt_digest_synthesis": _prompt_file("digest_synthesis_system.txt"),
     # Max classification attempts before an email is left terminally in `error`
     # (the recovery loop retries `error`/stalled emails up to this many times).
     "classify_max_attempts": 5,
@@ -111,3 +139,10 @@ def update_settings(session: Session, updates: dict[str, Any]) -> None:
         if key in PROTECTED_KEYS:
             raise KeyError(f"Setting must be changed via /auth endpoints: {key}")
         set_setting(session, key, value)
+
+
+def active_summary_prompt(settings: dict[str, Any]) -> str:
+    """The summary prompt for the configured summarization depth."""
+    key = SUMMARY_DEPTH_PROMPTS.get(
+        settings.get("summarization_depth") or "default", "prompt_summary_default")
+    return settings.get(key) or DEFAULTS[key]

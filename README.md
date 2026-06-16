@@ -159,8 +159,9 @@ deterministically with confidence 1.0 and bypasses the LLM entirely.
 
 The Emails page lists all processed mail with filterable columns (category,
 status, confidence, free-text). Clicking a row opens the detail view with
-classification rationale, planned/executed actions, and a feedback form. From
-the detail view you can re-run classification + rules for a single email.
+classification rationale, the saved summary, planned/executed actions, and a
+feedback form. From the detail view you can re-run classification + rules for a
+single email.
 
 Bulk operations (multi-select checkboxes): re-classify with LLM, or re-run
 rules only. The selection bar offers **"Select all N matching emails"** to
@@ -173,14 +174,30 @@ add Gmail's tabbed categories (Promotions, Social, Updates, Forums) so
 newsletters or social notifications are triaged too — without having to move
 them to the Inbox first.
 
+### Summaries & prompts
+
+When the LLM classifies an email, MailTriage also generates a plain-text
+**summary** and stores it (shown in the email detail view and reused by
+digests). Verbosity follows a system-wide **summarization depth** — *concise*,
+*default*, or *extended* — set in Settings → LLM Processing; changing the depth
+affects newly-classified mail only. Emails classified by a hard rule (sender
+match, no LLM) have no summary.
+
+The LLM prompts are editable in **Settings → LLM Prompts**: the classification
+system prompt, the three summary-depth prompts, and the digest synthesis
+prompt. Each defaults to the built-in text shipped with the app.
+
 ### Digests
 
 Pick categories, send times (e.g. `07:00, 16:00`) + timezone, min
-confidence, and optionally a per-digest Telegram chat id. Two-stage
-summarization (per-email micro-summaries → synthesis). No email is
-summarized twice by the same digest; failed sends keep emails eligible for
-the next run. Example: *Market news — 07:00 & 16:00 — category MarketNews —
-min confidence 0.8.*
+confidence, and optionally a per-digest Telegram chat id. Digests are built
+from the per-email summaries saved at classification time, so no email is
+re-summarized at digest time. The **digest mode** (Settings → LLM Processing)
+chooses how: **assemble** (default) lists the saved summaries with no LLM call,
+while **synthesize** makes a single LLM call to combine them into a cohesive
+digest. No email is included twice by the same digest; failed sends keep emails
+eligible for the next run. Example: *Market news — 07:00 & 16:00 — category
+MarketNews — min confidence 0.8.*
 
 ### Feedback & criteria refinement
 

@@ -30,6 +30,12 @@ _LLM_BACKOFF = 60  # seconds to wait after LLMUnavailable before retrying
 _RECOVERY_INTERVAL = 60  # seconds between recovery sweeps (stall_checker)
 _ERROR_RETRY_EVERY = 10  # retry `error` emails every Nth sweep (~10 min)
 
+# Output-token budget for the per-email summary, by summarization depth. These
+# are generous because a reasoning/"thinking" local model spends a few hundred
+# tokens before emitting any summary text — too small a cap yields an empty
+# (truncated) response and the digest then falls back to the raw snippet.
+_SUMMARY_MAX_TOKENS = {"concise": 512, "default": 768, "extended": 1024}
+
 CLASSIFICATION_SCHEMA_TEMPLATE = {
     "type": "object",
     "properties": {
@@ -43,7 +49,8 @@ CLASSIFICATION_SCHEMA_TEMPLATE = {
 
 
 def build_classification_prompt(categories: list[Category], email: Email,
-                                body: str, max_body_chars: int) -> tuple[str, str, dict]:
+                                body: str, max_body_chars: int,
+                                system_prompt: str) -> tuple[str, str, dict]:
     categories_block = "\n\n".join(
         f"### {c.name}\n{c.criteria_md.strip() or '(no criteria provided)'}"
         for c in categories
@@ -59,7 +66,37 @@ def build_classification_prompt(categories: list[Category], email: Email,
               "properties": {**CLASSIFICATION_SCHEMA_TEMPLATE["properties"],
                              "category": {"type": "string",
                                           "enum": [c.name for c in categories] + ["none"]}}}
-    return llm.load_prompt("classification_system.txt"), user, schema
+    return system_prompt, user, schema
+
+
+async def summarize_email(email: Email, body: str, settings: dict) -> None:
+    """Generate and store a plain-text summary for `email`, reusing the body
+    already fetched for classification. Best-effort: any failure is logged and
+    leaves `email.summary` unchanged rather than failing the classification."""
+    text = (body or email.snippet or "").strip()
+    if not text:
+        return
+    depth = settings.get("summarization_depth") or "default"
+    max_tokens = _SUMMARY_MAX_TOKENS.get(depth, _SUMMARY_MAX_TOKENS["default"])
+    max_ctx = int(settings.get("llm_max_context_tokens") or 0)
+    if max_ctx > 0:
+        max_tokens = min(max_tokens, max(64, max_ctx // 2))
+    user = (f"From: {email.sender}\nSubject: {email.subject}\n"
+            f"Date: {email.received_at}\n{text[:int(settings['classify_body_max_chars'])]}")
+    try:
+        summary = await llm.chat_text(
+            settings_service.active_summary_prompt(settings), user,
+            timeout=float(settings["llm_classify_timeout_seconds"]),
+            settings=settings,
+            max_concurrency=int(settings["llm_max_concurrency"]),
+            max_tokens=max_tokens,
+        )
+        email.summary = summary.strip() or None
+        if email.summary is None:
+            log.warning("email_summary_empty", email_id=email.id,
+                        depth=depth, max_tokens=max_tokens)
+    except llm.LLMError as e:
+        log.warning("email_summary_failed", email_id=email.id, error=str(e))
 
 
 async def fetch_body(session: Session, client: GmailClient, email: Email) -> str:
@@ -86,7 +123,9 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
         return
     session.commit()  # release the body-hash write before the LLM await
     system, user, schema = build_classification_prompt(
-        categories, email, body, int(settings["classify_body_max_chars"]))
+        categories, email, body, int(settings["classify_body_max_chars"]),
+        settings.get("prompt_classification_system")
+        or settings_service.DEFAULTS["prompt_classification_system"])
     try:
         result = await llm.chat_json(
             system, user, schema, "email_classification",
@@ -112,6 +151,7 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
     email.classified_at = datetime.now(UTC)
     email.status = EmailStatus.classified.value
     email.error = None
+    await summarize_email(email, body, settings)
 
 
 async def classify_one(session: Session, client: GmailClient, email: Email,
