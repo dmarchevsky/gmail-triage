@@ -201,10 +201,13 @@ export default function Emails() {
   const [filters, setFilters] = useState({
     category_id: "",
     status: "",
-    confidence_min: "",
-    confidence_max: "",
     q: "",
   });
+  const hasActiveFilters = filters.category_id !== "" || filters.status !== "" || filters.q !== "";
+  const clearFilters = () => {
+    setPage(1);
+    setFilters({ category_id: "", status: "", q: "" });
+  };
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [allMatchingSelected, setAllMatchingSelected] = useState(false);
   const [bulkConfirm, setBulkConfirm] = useState<"reclassify" | null>(null);
@@ -214,8 +217,6 @@ export default function Emails() {
     params.set("page", String(page));
     if (filters.category_id) params.set("category_id", filters.category_id);
     if (filters.status) params.set("status", filters.status);
-    if (filters.confidence_min) params.set("confidence_min", filters.confidence_min);
-    if (filters.confidence_max) params.set("confidence_max", filters.confidence_max);
     if (filters.q) params.set("q", filters.q);
     setList(await get<EmailList>(`/emails?${params.toString()}`));
   }, [page, filters]);
@@ -279,8 +280,6 @@ export default function Emails() {
       const params = new URLSearchParams();
       if (filters.category_id) params.set("category_id", filters.category_id);
       if (filters.status) params.set("status", filters.status);
-      if (filters.confidence_min) params.set("confidence_min", filters.confidence_min);
-      if (filters.confidence_max) params.set("confidence_max", filters.confidence_max);
       if (filters.q) params.set("q", filters.q);
       const result = await get<{ ids: number[] }>(`/emails/ids?${params.toString()}`);
       setSelectedIds(new Set(result.ids));
@@ -365,30 +364,13 @@ export default function Emails() {
             </option>
           ))}
         </select>
-        <input
-          type="number"
-          step="0.1"
-          min="0"
-          max="1"
-          placeholder="min conf"
-          value={filters.confidence_min}
-          onChange={(e) => {
-            setPage(1);
-            setFilters({ ...filters, confidence_min: e.target.value });
-          }}
-        />
-        <input
-          type="number"
-          step="0.1"
-          min="0"
-          max="1"
-          placeholder="max conf"
-          value={filters.confidence_max}
-          onChange={(e) => {
-            setPage(1);
-            setFilters({ ...filters, confidence_max: e.target.value });
-          }}
-        />
+        <button
+          className="clear-filters"
+          onClick={clearFilters}
+          disabled={!hasActiveFilters}
+        >
+          Clear filters
+        </button>
       </div>
 
       <BulkActionBar
