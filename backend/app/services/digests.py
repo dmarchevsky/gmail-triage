@@ -133,18 +133,23 @@ def _render_message(digest: Digest, emails: list[Email], summary: str,
     parts = []
     if dry_run_prefix:
         parts.append("[DRY RUN]")
-    parts.append(f"<b>{esc(digest.name)}</b> — {len(emails)} email(s)")
-    parts.append(esc(summary))
+    date_str = datetime.now(tz).strftime("%b %d")
+    parts.append(
+        f"📬 <b>{esc(digest.name)}</b> · {date_str}\n"
+        f"<b>{len(emails)}</b> new email(s)")
+    parts.append(f"<blockquote>{esc(summary)}</blockquote>")
     if digest.include_metadata:
-        lines = []
+        lines = ["──────────"]
         for e in emails:
             when = e.received_at.astimezone(tz).strftime("%H:%M") \
                 if e.received_at else "?"
-            line = f"• {when} {esc(e.sender or '?')} — {esc(e.subject or '(no subject)')}"
+            sender = esc(e.sender or "?")
+            subject = esc(e.subject or "(no subject)")
             if digest.include_links:
-                line += (f' <a href="{GMAIL_DEEP_LINK.format(msg_id=e.gmail_message_id)}"'
-                         f">open</a>")
-            lines.append(line)
+                subject = (
+                    f'<a href="{GMAIL_DEEP_LINK.format(msg_id=e.gmail_message_id)}">'
+                    f"{subject}</a>")
+            lines.append(f"🔹 <b>{sender}</b> <i>{when}</i>\n{subject}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -198,7 +203,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
                 if token and chat_id:
                     await telegram.send_message(
                         token, str(chat_id),
-                        f"<b>{telegram.escape_html(digest.name)}</b>: no news.",
+                        f"✅ <b>{telegram.escape_html(digest.name)}</b>: no news.",
                     )
             run.finished_at = datetime.now(UTC)
             session.commit()

@@ -39,6 +39,34 @@ def test_split_message_4096_numbered_parts():
     assert rejoined == text.replace("\n", "")
 
 
+def test_split_message_keeps_short_html_intact():
+    text = "<blockquote>hi</blockquote>"
+    assert telegram.split_message(text) == [text]
+
+
+def test_split_message_closes_and_reopens_open_tags():
+    """A <blockquote> whose content overflows 4096 chars must not be cut into
+    parts with unbalanced tags; the splitter closes it at a boundary and reopens
+    it in the next part so every part is valid standalone HTML."""
+    import re as _re
+
+    inner = "\n".join(f"quoted line {i}" for i in range(600))  # > 4096 chars
+    text = f"<blockquote>{inner}</blockquote>"
+    parts = telegram.split_message(text)
+
+    assert len(parts) > 1
+    for p in parts:
+        body = p.split("] ", 1)[1]  # strip the "[i/n] " prefix
+        assert len(p) <= 4096
+        # balanced + every part sits inside the quote
+        assert body.count("<blockquote>") == body.count("</blockquote>") >= 1
+    # visible text (tags + prefixes stripped) round-trips
+    visible = "".join(
+        _re.sub(r"</?blockquote>", "", p.split("] ", 1)[1]) for p in parts
+    ).replace("\n", "")
+    assert visible == inner.replace("\n", "")
+
+
 def test_escape_html():
     assert telegram.escape_html("<b>x & y</b>") == "&lt;b&gt;x &amp; y&lt;/b&gt;"
 
@@ -392,8 +420,47 @@ def test_render_message_uses_digest_timezone():
     email = Email(gmail_message_id="z1", sender="a@x.com", subject="s",
                   received_at=datetime(2026, 6, 12, 18, 30, tzinfo=UTC))
     msg = _render_message(digest, [email], "summary", dry_run_prefix=False)
-    assert "• 11:30 " in msg          # 18:30 UTC == 11:30 PDT
+    assert "<i>11:30</i>" in msg          # 18:30 UTC == 11:30 PDT
 
     digest.timezone = "Not/AZone"
     msg = _render_message(digest, [email], "summary", dry_run_prefix=False)
-    assert "• 18:30 " in msg          # invalid tz falls back to UTC
+    assert "<i>18:30</i>" in msg          # invalid tz falls back to UTC
+
+
+def test_render_message_rich_formatting():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="News", timezone="UTC",
+                    include_metadata=True, include_links=True)
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
+                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msg = _render_message(digest, [email], "the summary", dry_run_prefix=False)
+    assert "📬 <b>News</b>" in msg
+    assert "<b>1</b> new email(s)" in msg
+    assert "<blockquote>the summary</blockquote>" in msg
+    assert "──────────" in msg
+    assert '<a href="https://mail.google.com/mail/u/0/#all/m9">Hello</a>' in msg
+
+
+def test_render_message_no_links_plain_subject():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="News", timezone="UTC",
+                    include_metadata=True, include_links=False)
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
+                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msg = _render_message(digest, [email], "s", dry_run_prefix=False)
+    assert "<a href" not in msg
+    assert "Hello" in msg
+
+
+def test_render_message_no_metadata_omits_list():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="News", timezone="UTC",
+                    include_metadata=False, include_links=True)
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
+                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msg = _render_message(digest, [email], "s", dry_run_prefix=False)
+    assert "──────────" not in msg
+    assert "<blockquote>s</blockquote>" in msg
