@@ -229,25 +229,6 @@ gunzip -c mailtriage-pg-backup.sql.gz | \
 For bare-metal SQLite mode, back up the `./data/mailtriage.db` file (or the
 `mailtriage-data` volume) instead.
 
-### Migrating from SQLite (pre-Postgres installs)
-
-1. **Back up the SQLite file first:**
-   ```bash
-   docker run --rm -v mailtriage-data:/data -v "$PWD":/b alpine \
-       cp /data/mailtriage.db /b/mailtriage-sqlite-backup.db
-   ```
-2. Add `POSTGRES_PASSWORD` to `.env`, rebuild, start Postgres, migrate:
-   ```bash
-   docker compose build
-   docker compose up -d postgres
-   docker compose run --rm mailtriage python scripts/migrate_sqlite_to_pg.py
-   docker compose up -d
-   ```
-   The script creates the schema (Alembic), copies every table with ids
-   preserved, resets Postgres sequences, and verifies per-table row counts.
-   The SQLite file is left untouched in the `mailtriage-data` volume as a
-   fallback.
-
 ### Egress surface
 
 The container talks to exactly:
