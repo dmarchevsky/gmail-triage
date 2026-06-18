@@ -1,5 +1,4 @@
 import { ReactNode, useEffect, useState } from "react";
-import { EmailAction } from "./api";
 
 const ACTION_LABELS: Record<string, string> = {
   add_label: "Add label",
@@ -95,7 +94,12 @@ const ACTION_TONE: Record<string, "ok" | "warn" | "error" | "neutral" | "info"> 
 // Render an email's actions as badges: add_label → colored LabelPill, all other
 // actions → tone-coded Badge. Deduped by type+label so an email actioned by
 // several rules doesn't show repeated identical badges.
-export function ActionBadges({ actions }: { actions: EmailAction[] }) {
+interface ActionItem {
+  action_type: string;
+  action_params?: Record<string, unknown> | null;
+}
+
+export function ActionBadges({ actions }: { actions: ActionItem[] }) {
   if (actions.length === 0) return <>—</>;
   const seen = new Set<string>();
   const pills: ReactNode[] = [];

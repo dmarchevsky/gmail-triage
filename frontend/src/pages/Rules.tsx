@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Category, Label, Rule, RuleAction, del, delWithBody, errMsg, get, post, put } from "../api";
 import { useSelection } from "../useSelection";
 import {
+  ActionBadges,
   Badge,
   BulkActionBar,
   ConfirmDialog,
-  LabelPill,
   Modal,
   actionLabel,
   pct,
@@ -633,22 +633,12 @@ export default function Rules() {
                 )}
               </td>
               <td data-label="Actions">
-                {r.actions.map((a, idx) => (
-                  <span key={idx} className="action-chip">
-                    {actionLabel(a.type)}
-                    {a.label_name && (
-                      <>
-                        {" "}
-                        <LabelPill
-                          name={a.label_name}
-                          textColor={a.text_color}
-                          backgroundColor={a.background_color}
-                        />
-                      </>
-                    )}
-                    {idx < r.actions.length - 1 && ", "}
-                  </span>
-                ))}
+                <ActionBadges actions={r.actions.map(a => ({
+                  action_type: a.type,
+                  action_params: a.label_name
+                    ? { label_name: a.label_name, text_color: a.text_color, background_color: a.background_color }
+                    : null,
+                }))} />
               </td>
               <td data-label="Mode">
                 {r.dry_run ? <Badge tone="dry">DRY RUN</Badge> : <Badge tone="ok">LIVE</Badge>}
