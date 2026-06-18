@@ -174,6 +174,37 @@ add Gmail's tabbed categories (Promotions, Social, Updates, Forums) so
 newsletters or social notifications are triaged too — without having to move
 them to the Inbox first.
 
+### Real-time push (Gmail watch + Pub/Sub pull) — optional
+
+By default MailTriage **polls** every `poll_interval_seconds`. If you want
+near-real-time triage (seconds, not minutes) you can switch **Settings →
+Ingestion mode** to **Push**. This uses Gmail `users.watch` to publish change
+notifications to a Google Cloud **Pub/Sub** topic, and a background **pull**
+consumer that wakes the poller as soon as mail arrives.
+
+It stays true to the trusted-LAN model: the consumer **pulls** over an outbound
+connection, so there is **no inbound endpoint** to expose and no public HTTPS /
+webhook to secure. Polling keeps running as a safety net, so a lapsed watch or a
+Pub/Sub hiccup can never drop mail (ingestion is idempotent). The watch
+auto-renews (Gmail expires it within 7 days).
+
+One-time Google Cloud setup (same project as your OAuth client):
+
+1. **APIs & Services → Library** → enable **Cloud Pub/Sub API**.
+2. **Pub/Sub → Topics → Create topic**, e.g. `gmail-triage`.
+3. On that topic, **grant `roles/pubsub.publisher` to**
+   `gmail-api-push@system.gserviceaccount.com` (this is what lets Gmail publish
+   to it).
+4. **Create a *pull* subscription** on the topic, e.g. `gmail-triage-sub`
+   (delivery type: **Pull**).
+5. Grant **your own Google account** `roles/pubsub.subscriber` on the
+   subscription (the app pulls with your user token).
+6. In MailTriage: **Settings → Ingestion mode → Push**, paste the full topic and
+   subscription resource names (`projects/<proj>/topics/...` and
+   `projects/<proj>/subscriptions/...`), **Save**, then **reconnect Gmail** so
+   consent also grants the (non-send) `pubsub` scope. The Dashboard's Engine card
+   shows the consumer status and last-notification time.
+
 ### Summaries & prompts
 
 When the LLM classifies an email, MailTriage also generates a plain-text
@@ -237,6 +268,7 @@ The container talks to exactly:
 |---|---|
 | `accounts.google.com`, `oauth2.googleapis.com` | OAuth consent/token/revoke |
 | `gmail.googleapis.com` | Gmail REST API |
+| `pubsub.googleapis.com` | Pub/Sub pull (only in push ingestion mode) |
 | `api.telegram.org` | digest delivery (only if configured) |
 | your `LLM_BASE_URL` | classification/summaries (usually LAN/localhost) |
 

@@ -391,6 +391,91 @@ export default function SettingsPage() {
       <MailboxScope settings={settings} onSave={saveValues} />
 
       <div className="settings-section">
+        <h3>
+          Ingestion mode{" "}
+          <Badge tone={settings.gmail_ingest_mode === "push" ? "info" : "neutral"}>
+            {settings.gmail_ingest_mode === "push" ? "push (real-time)" : "polling"}
+          </Badge>
+        </h3>
+        <p className="sub">
+          <b>Polling</b> checks Gmail every interval (below). <b>Push</b> uses
+          Gmail <code>watch</code> + a Cloud Pub/Sub <b>pull</b> subscription to
+          triage new mail within seconds — outbound-only, no inbound endpoint;
+          polling stays on as a safety net. See the README for the one-time Google
+          Cloud setup (topic, pull subscription, IAM).
+        </p>
+        <div className="form-grid">
+          <label>
+            Mode
+            <select
+              value={settings.gmail_ingest_mode}
+              onChange={(e) => saveValues({ gmail_ingest_mode: e.target.value })}
+            >
+              <option value="poll">Polling</option>
+              <option value="push">Push (Pub/Sub pull)</option>
+            </select>
+          </label>
+          <span />
+          <label className="span2">
+            Pub/Sub topic (full resource name)
+            <input
+              placeholder="projects/my-project/topics/gmail-triage"
+              value={
+                draft.gmail_pubsub_topic !== undefined
+                  ? draft.gmail_pubsub_topic
+                  : settings.gmail_pubsub_topic
+              }
+              onChange={(e) => setDraft({ ...draft, gmail_pubsub_topic: e.target.value })}
+            />
+          </label>
+          <label className="span2">
+            Pub/Sub pull subscription (full resource name)
+            <input
+              placeholder="projects/my-project/subscriptions/gmail-triage-sub"
+              value={
+                draft.gmail_pubsub_subscription !== undefined
+                  ? draft.gmail_pubsub_subscription
+                  : settings.gmail_pubsub_subscription
+              }
+              onChange={(e) =>
+                setDraft({ ...draft, gmail_pubsub_subscription: e.target.value })
+              }
+            />
+          </label>
+        </div>
+        {settings.gmail_ingest_mode === "push" && (
+          <p className="sub">
+            Push needs the <code>pubsub</code> scope: after saving the topic and
+            subscription, <b>reconnect Gmail</b> above to grant it. Consumer:{" "}
+            <Badge
+              tone={
+                status?.ingest.pubsub_status === "running"
+                  ? "ok"
+                  : status?.ingest.pubsub_status === "error"
+                    ? "error"
+                    : "neutral"
+              }
+            >
+              {status?.ingest.pubsub_status ?? "stopped"}
+            </Badge>
+          </p>
+        )}
+        <button
+          className="primary"
+          onClick={() => {
+            const values: Record<string, unknown> = {};
+            if (draft.gmail_pubsub_topic !== undefined)
+              values.gmail_pubsub_topic = draft.gmail_pubsub_topic.trim();
+            if (draft.gmail_pubsub_subscription !== undefined)
+              values.gmail_pubsub_subscription = draft.gmail_pubsub_subscription.trim();
+            saveValues(values);
+          }}
+        >
+          Save Pub/Sub settings
+        </button>
+      </div>
+
+      <div className="settings-section">
         <h3>Polling & processing</h3>
         <div className="form-grid">
           {pollingFields.map(([key, label, placeholder]) => (

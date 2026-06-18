@@ -33,6 +33,9 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+# Requested in addition to gmail.modify only in push mode, so the same user token
+# can pull from the Pub/Sub subscription. Non-send-capable; passes the scope guard.
+PUBSUB_SCOPE = "https://www.googleapis.com/auth/pubsub"
 
 # Refuse to operate if any of these ever appear in granted scopes (§6.1).
 SEND_CAPABLE_SCOPES = {
@@ -79,15 +82,17 @@ def _client_config(raw_json: str) -> dict:
     raise GmailError("Unrecognized OAuth client credentials JSON")
 
 
-def build_auth_url(client_secret_json: str, redirect_uri: str) -> str:
+def build_auth_url(client_secret_json: str, redirect_uri: str, *,
+                   include_pubsub: bool = False) -> str:
     cfg = _client_config(client_secret_json)
     state = secrets.token_urlsafe(24)
     _pending_states[state] = datetime.now(UTC)
+    scopes = [*SCOPES, PUBSUB_SCOPE] if include_pubsub else SCOPES
     params = {
         "client_id": cfg["client_id"],
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(SCOPES),
+        "scope": " ".join(scopes),
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
@@ -121,6 +126,27 @@ async def exchange_code(client_secret_json: str, code: str, redirect_uri: str) -
     return token
 
 
+async def _refresh_token(client_cfg: dict, refresh_token: str) -> dict:
+    """Exchange a refresh token for a fresh access token. Raises on failure."""
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.post(GOOGLE_TOKEN_URL, data={
+            "client_id": client_cfg["client_id"],
+            "client_secret": client_cfg["client_secret"],
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        })
+    if resp.status_code != 200:
+        raise GmailAuthError(f"Token refresh failed: {resp.status_code} {resp.text[:300]}")
+    return resp.json()
+
+
+def _apply_refresh(token: dict, fresh: dict) -> None:
+    """Update an OAuth token dict in place from a refresh response."""
+    token["access_token"] = fresh["access_token"]
+    token["expiry"] = (datetime.now(UTC)
+                       + timedelta(seconds=fresh.get("expires_in", 3600))).isoformat()
+
+
 # ── Token persistence (Fernet-encrypted) ────────────────────────────────────
 
 def save_token(session: Session, token: dict, email: str | None = None) -> GmailAuth:
@@ -148,6 +174,26 @@ def load_token(session: Session) -> tuple[GmailAuth, dict] | None:
     return row, token
 
 
+async def get_access_token(session: Session, client_secret_json: str) -> str:
+    """A fresh OAuth access token for the connected account, refreshing and
+    persisting if within 60s of expiry. Used by the Pub/Sub pull consumer, which
+    talks to pubsub.googleapis.com (outside the Gmail GmailClient base URL) with
+    the same user token (gmail.modify + pubsub scopes)."""
+    loaded = load_token(session)
+    if loaded is None:
+        raise GmailAuthError("Gmail is not connected")
+    _, token = loaded
+    expiry = datetime.fromisoformat(token.get("expiry", "1970-01-01T00:00:00+00:00"))
+    if expiry - datetime.now(UTC) > timedelta(seconds=60):
+        return token["access_token"]
+    fresh = await _refresh_token(_client_config(client_secret_json),
+                                 token.get("refresh_token", ""))
+    _apply_refresh(token, fresh)
+    save_token(session, token)
+    session.commit()
+    return token["access_token"]
+
+
 # ── Authenticated client with refresh + backoff ─────────────────────────────
 
 class GmailClient:
@@ -170,18 +216,8 @@ class GmailClient:
         expiry = datetime.fromisoformat(self.token.get("expiry", "1970-01-01T00:00:00+00:00"))
         if expiry - datetime.now(UTC) > timedelta(seconds=60):
             return
-        resp = await self._http.post(GOOGLE_TOKEN_URL, data={
-            "client_id": self.client_cfg["client_id"],
-            "client_secret": self.client_cfg["client_secret"],
-            "refresh_token": self.token.get("refresh_token", ""),
-            "grant_type": "refresh_token",
-        })
-        if resp.status_code != 200:
-            raise GmailAuthError(f"Token refresh failed: {resp.status_code} {resp.text[:300]}")
-        fresh = resp.json()
-        self.token["access_token"] = fresh["access_token"]
-        self.token["expiry"] = (datetime.now(UTC)
-                                + timedelta(seconds=fresh.get("expires_in", 3600))).isoformat()
+        fresh = await _refresh_token(self.client_cfg, self.token.get("refresh_token", ""))
+        _apply_refresh(self.token, fresh)
         save_token(self.db, self.token)
         self.db.commit()
 
@@ -287,6 +323,21 @@ class GmailClient:
     async def trash_message(self, message_id: str) -> dict:
         # messages.trash only — the permanent-delete endpoint is intentionally absent.
         return await self._request("POST", f"/messages/{message_id}/trash")
+
+    async def watch(self, topic: str, label_ids: list[str] | None = None) -> dict:
+        """Start/refresh a Gmail push watch publishing change notifications to
+        `topic` (full resource name projects/<p>/topics/<t>). Read-organize-safe:
+        watch only asks Gmail to emit notifications; it cannot send mail. Returns
+        {historyId, expiration(ms)}."""
+        body: dict = {"topicName": topic}
+        if label_ids:
+            body["labelIds"] = label_ids
+            body["labelFilterBehavior"] = "include"
+        return await self._request("POST", "/watch", json=body)
+
+    async def stop_watch(self) -> dict:
+        """Stop Gmail push notifications for this mailbox (users.stop)."""
+        return await self._request("POST", "/stop")
 
 
 class GmailHistoryExpired(GmailError):

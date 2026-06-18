@@ -42,6 +42,12 @@ def wake() -> None:
 # Never ingest these regardless of scope (Sent/Drafts/Spam/Trash/Chats).
 EXCLUDED_LABELS = {"SENT", "DRAFT", "TRASH", "SPAM", "CHAT"}
 
+# Gmail expires a watch within 7 days; renew once we are this close to expiry.
+WATCH_RENEW_BEFORE = timedelta(hours=24)
+# In push mode the configured poll interval governs real-time (handled by wakes);
+# the loop itself only needs to poll occasionally as a catch-up safety net.
+PUSH_FALLBACK_POLL_SECONDS = 900
+
 
 def _own_addresses(session: Session) -> set[str]:
     loaded = gmail.load_token(session)
@@ -219,6 +225,52 @@ def _record_poll_failure(session, error: str, *, kind: str | None = None) -> Non
         log.warning("poll_failure_audit_failed", error=error)
 
 
+async def _ensure_watch(session: Session, client: GmailClient) -> None:
+    """Push mode: (re)start the Gmail watch if it is missing or within
+    WATCH_RENEW_BEFORE of expiry. Persists the new expiration (epoch ms). The
+    watch only asks Gmail to publish change notifications — it cannot send mail."""
+    topic = settings_service.get_setting(session, "gmail_pubsub_topic")
+    if not topic:
+        return
+    exp = client.auth_row.watch_expiration
+    if exp:
+        try:
+            expires_at = datetime.fromtimestamp(int(exp) / 1000, UTC)
+            if expires_at - datetime.now(UTC) > WATCH_RENEW_BEFORE:
+                return  # still comfortably fresh
+        except (ValueError, TypeError):
+            pass  # malformed expiry → re-watch
+    result = await client.watch(topic, list(_scope_labels(session)) or None)
+    client.auth_row.watch_expiration = str(result.get("expiration", ""))
+    session.commit()
+    log.info("gmail_watch_started", expiration=client.auth_row.watch_expiration)
+
+
+async def _maybe_manage_watch(session: Session, *, push: bool) -> None:
+    """Keep the Gmail watch aligned with the ingest mode: ensure/renew it in push
+    mode, tear down any lingering watch in poll mode. Best-effort: a watch error
+    (e.g. the topic's publisher IAM not yet granted) is logged but never raised,
+    so it cannot fail the catch-up poll cycle that already ingested mail."""
+    client_secret = settings_service.get_setting(session, "gmail_client_secret_json")
+    if not client_secret or gmail.load_token(session) is None:
+        return
+    try:
+        client = GmailClient(session, client_secret)
+        try:
+            if push:
+                await _ensure_watch(session, client)
+            elif client.auth_row.watch_expiration:
+                await client.stop_watch()
+                client.auth_row.watch_expiration = None
+                session.commit()
+                log.info("gmail_watch_stopped")
+        finally:
+            await client.aclose()
+    except Exception as e:  # noqa: BLE001 — watch upkeep must never fail the poll
+        session.rollback()
+        log.warning("gmail_watch_management_failed", push=push, error=str(e))
+
+
 async def poller_loop() -> None:
     """Background task; never crashes the app on Gmail errors."""
     from app.db import get_sessionmaker
@@ -233,6 +285,7 @@ async def poller_loop() -> None:
             interval = max(60, int(settings_service.get_setting(
                 session, "poll_interval_seconds")))
             paused = bool(settings_service.get_setting(session, "poller_paused"))
+            mode = settings_service.get_setting(session, "gmail_ingest_mode")
             connected = gmail.load_token(session) is not None
             if paused:
                 app_state.poller_status = "paused"
@@ -244,6 +297,11 @@ async def poller_loop() -> None:
                 result = await poll_once(session)
                 app_state.poller_last_run_at = datetime.now(UTC).isoformat()
                 app_state.poller_last_error = None
+                # Keep the watch aligned with the mode; in push mode the periodic
+                # poll is just a catch-up safety net, so back off to a long cadence.
+                await _maybe_manage_watch(session, push=(mode == "push"))
+                if mode == "push":
+                    interval = max(interval, PUSH_FALLBACK_POLL_SECONDS)
                 log.info("poll_cycle_done", **result)
         except GmailAuthError as e:
             app_state.gmail_status = "auth_error"

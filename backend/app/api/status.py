@@ -24,7 +24,8 @@ def _telegram_status(session: Session) -> str:
 
 @router.get("/status")
 def get_status(session: Session = Depends(get_session)) -> dict:
-    gmail_connected = session.scalar(select(GmailAuth).limit(1)) is not None
+    gmail_row = session.scalar(select(GmailAuth).limit(1))
+    gmail_connected = gmail_row is not None
     return {
         "ok": True,
         "version": "0.1.0",
@@ -32,6 +33,12 @@ def get_status(session: Session = Depends(get_session)) -> dict:
             "connected": gmail_connected,
             "email": app_state.gmail_email,
             "status": app_state.gmail_status,
+        },
+        "ingest": {
+            "mode": settings_service.get_setting(session, "gmail_ingest_mode"),
+            "pubsub_status": app_state.pubsub_status,
+            "last_notification_at": app_state.last_notification_at,
+            "watch_expiration": gmail_row.watch_expiration if gmail_row else None,
         },
         "llm": {"status": app_state.llm_status},
         "telegram": {"status": _telegram_status(session)},

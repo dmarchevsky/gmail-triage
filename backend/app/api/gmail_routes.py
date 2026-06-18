@@ -37,8 +37,12 @@ def oauth_start(body: OAuthStartBody, request: Request,
     if not client_secret:
         raise HTTPException(status_code=400,
                             detail="Paste your Google OAuth client credentials JSON first")
+    # In push mode also request the pubsub scope so the same user token can pull
+    # the Pub/Sub subscription (no separate service-account secret).
+    push_mode = settings_service.get_setting(session, "gmail_ingest_mode") == "push"
     try:
-        url = gmail.build_auth_url(client_secret, _redirect_uri(request))
+        url = gmail.build_auth_url(client_secret, _redirect_uri(request),
+                                   include_pubsub=push_mode)
     except gmail.GmailError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"auth_url": url}
@@ -135,7 +139,21 @@ async def disconnect(session: Session = Depends(get_session)) -> dict:
     loaded = gmail.load_token(session)
     if loaded is None:
         return {"connected": False}
-    _, token = loaded
+    row, token = loaded
+    # Tear down an active Gmail watch first (best-effort; needs the live token,
+    # so it must happen before revoke). Otherwise Gmail keeps publishing change
+    # notifications to the Pub/Sub topic until the watch lapses (~7 days).
+    if row.watch_expiration:
+        client_secret = settings_service.get_setting(session, "gmail_client_secret_json")
+        if client_secret:
+            try:
+                client = gmail.GmailClient(session, client_secret)
+                try:
+                    await client.stop_watch()
+                finally:
+                    await client.aclose()
+            except Exception as e:  # noqa: BLE001 — disconnect proceeds regardless
+                log.warning("watch_stop_failed", error=str(e))
     try:
         await gmail.revoke_token(token)
     except Exception as e:  # noqa: BLE001 — still delete locally if revoke fails

@@ -3,9 +3,13 @@
 Status: all items implemented and covered by tests where noted.
 
 ## 1. OAuth scope minimization — ✅
-- Only `https://www.googleapis.com/auth/gmail.modify` is ever requested
-  (`app/services/gmail.py::SCOPES`); the auth URL is built with exactly this
-  scope (test: `test_oauth_flow_stores_encrypted_token`).
+- `gmail.modify` is the only Gmail scope requested (`app/services/gmail.py::SCOPES`);
+  the auth URL defaults to exactly this scope (tests:
+  `test_oauth_flow_stores_encrypted_token`, `test_build_auth_url_default_scope_modify_only`).
+  In push (Pub/Sub) ingestion mode the **non-send-capable** `pubsub` scope is
+  additionally requested so the same user token can pull notifications
+  (`PUBSUB_SCOPE`; tests: `test_build_auth_url_push_includes_pubsub_scope`,
+  `test_pubsub_scope_is_not_send_capable`). No service-account key is stored.
 - `assert_scopes_safe()` rejects tokens carrying `gmail.send`,
   `gmail.compose`, or `mail.google.com` at token save **and** at app startup
   (tests: `test_send_capable_scope_rejected`, `test_startup_scope_guard`).
@@ -28,8 +32,11 @@ Status: all items implemented and covered by tests where noted.
 
 ## 3. Egress surface — ✅
 - Documented in README §6: Google OAuth/Gmail, `api.telegram.org`, and the
-  configured LLM endpoint. Nothing else is contacted. `httpx` honors
-  `HTTPS_PROXY` for users who route egress through a proxy.
+  configured LLM endpoint. Push ingestion mode additionally contacts
+  `pubsub.googleapis.com` — **outbound pull only**, so push adds no inbound
+  endpoint and keeps the trusted-LAN model (no public HTTPS webhook to secure).
+  Nothing else is contacted. `httpx` honors `HTTPS_PROXY` for users who route
+  egress through a proxy.
 
 ## 4. UI/API auth — ✅
 - Mandatory password; no auth-less mode (startup refusal).

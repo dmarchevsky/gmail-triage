@@ -69,6 +69,13 @@ DEFAULTS: dict[str, Any] = {
     "telegram_bot_token": "",
     "telegram_default_chat_id": "",
     "gmail_client_secret_json": "",
+    # Ingestion mode. "poll" = periodic history sync only. "push" = Gmail
+    # users.watch publishes to a Pub/Sub topic and a background *pull* consumer
+    # wakes the poller in real time (no inbound endpoint). Pub/Sub names are full
+    # resource paths, e.g. projects/<proj>/topics/<t> and .../subscriptions/<s>.
+    "gmail_ingest_mode": "poll",
+    "gmail_pubsub_topic": "",
+    "gmail_pubsub_subscription": "",
     "ignore_senders": [],  # list of glob/regex patterns skipped before LLM
     # Gmail label IDs that define the poll scope. Default = inbox + the four
     # category tabs (so Promotions/Updates that skip the inbox are triaged too).
@@ -138,6 +145,8 @@ def update_settings(session: Session, updates: dict[str, Any]) -> None:
             raise KeyError(f"Unknown setting: {key}")
         if key in PROTECTED_KEYS:
             raise KeyError(f"Setting must be changed via /auth endpoints: {key}")
+        if key == "gmail_ingest_mode" and value not in ("poll", "push"):
+            raise ValueError(f"gmail_ingest_mode must be 'poll' or 'push', got {value!r}")
         set_setting(session, key, value)
 
 

@@ -127,6 +127,27 @@ export default function Dashboard() {
                 </Badge>
               </div>
               <div className="sub">last run: {fmtDate(status?.poller.last_run_at)}</div>
+              {status?.ingest.mode === "push" && (
+                <>
+                  <div className="status-row">
+                    <span>Push</span>
+                    <Badge
+                      tone={
+                        status.ingest.pubsub_status === "running"
+                          ? "ok"
+                          : status.ingest.pubsub_status === "error"
+                            ? "error"
+                            : "neutral"
+                      }
+                    >
+                      {status.ingest.pubsub_status}
+                    </Badge>
+                  </div>
+                  <div className="sub">
+                    last notification: {fmtDate(status.ingest.last_notification_at)}
+                  </div>
+                </>
+              )}
               <div className="status-row">
                 <span>Classifier</span>
                 {status?.classifier.running ? (

@@ -48,6 +48,12 @@ export interface StatusResponse {
   ok: boolean;
   version: string;
   gmail: { connected: boolean; email: string | null; status: string };
+  ingest: {
+    mode: string;
+    pubsub_status: string;
+    last_notification_at: string | null;
+    watch_expiration: string | null;
+  };
   llm: { status: string };
   telegram: { status: string };
   poller: {
@@ -190,6 +196,9 @@ export interface Settings {
   telegram_bot_token_configured: boolean;
   telegram_default_chat_id: string;
   gmail_client_secret_json_configured: boolean;
+  gmail_ingest_mode: string;
+  gmail_pubsub_topic: string;
+  gmail_pubsub_subscription: string;
   ui_password_hash_configured: boolean;
   auth_disabled: boolean;
   ignore_senders: string[];

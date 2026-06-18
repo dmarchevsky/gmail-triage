@@ -65,6 +65,9 @@ class GmailAuth(Base):
     email_address: Mapped[str | None] = mapped_column(String(320))
     granted_scopes: Mapped[list | None] = mapped_column(JSON)
     history_id: Mapped[str | None] = mapped_column(String(64))
+    # Gmail users.watch expiration (epoch ms, as text). NULL = no active watch
+    # (poll mode, or push mode not yet watched). The poller renews before lapse.
+    watch_expiration: Mapped[str | None] = mapped_column(String(32))
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
 

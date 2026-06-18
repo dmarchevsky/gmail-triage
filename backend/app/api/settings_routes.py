@@ -21,7 +21,7 @@ def get_settings(session: Session = Depends(get_session)) -> dict:
 def put_settings(updates: dict[str, Any], session: Session = Depends(get_session)) -> dict:
     try:
         settings_service.update_settings(session, updates)
-    except KeyError as e:
+    except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     audit(session, "user", "settings_updated",
           {"keys": [k for k in updates if k not in settings_service.SECRET_KEYS]})
