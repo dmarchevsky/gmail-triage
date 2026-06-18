@@ -123,8 +123,55 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
     return body[:synthesis_chars]
 
 
+_EXPANDABLE_MIN_CHARS = 350
+
+
+def _normalize_summary(text: str) -> str:
+    """Strip trailing spaces per line and collapse runs of blank lines."""
+    out: list[str] = []
+    for ln in (line.rstrip() for line in text.strip().splitlines()):
+        if ln == "" and (not out or out[-1] == ""):
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def _blockquote(inner_html: str) -> str:
+    """Wrap already-safe inner HTML in a blockquote; expandable when long."""
+    expandable = inner_html.count("\n") >= 4 or len(inner_html) > _EXPANDABLE_MIN_CHARS
+    tag = "<blockquote expandable>" if expandable else "<blockquote>"
+    return f"{tag}{inner_html}</blockquote>"
+
+
+def _summary_body(digest: Digest, emails: list[Email], summary: str,
+                  digest_mode: str) -> list[str]:
+    """Presentation parts for the summary. synthesize: a bold TL;DR line then the
+    rest in a blockquote. assemble: per-email bullets (subject + saved summary)
+    in a blockquote. Returned strings are already-safe HTML."""
+    esc = telegram.escape_html
+    if digest_mode == "synthesize":
+        norm = _normalize_summary(summary)
+        first, _, rest = norm.partition("\n")
+        parts = []
+        if first:
+            parts.append(f"<b>{esc(first)}</b>")
+        if rest.strip():
+            parts.append(_blockquote(esc(rest)))
+        return parts
+    # assemble mode: `summary` is unused here — render directly from each email's
+    # saved summary (same field _summarize used), so the bullets stay consistent
+    # with the stored summary_text.
+    lines = []
+    for e in emails:
+        text = (e.summary or e.snippet or "").strip()[:500]
+        if not text:
+            continue  # skip emails with no saved summary/snippet
+        lines.append(f"• <b>{esc(e.subject or '(no subject)')}</b> — {esc(text)}")
+    return [_blockquote("\n".join(lines))] if lines else []
+
+
 def _render_message(digest: Digest, emails: list[Email], summary: str,
-                    dry_run_prefix: bool) -> str:
+                    dry_run_prefix: bool, digest_mode: str = "assemble") -> str:
     esc = telegram.escape_html
     try:
         tz = ZoneInfo(digest.timezone or "UTC")
@@ -137,7 +184,7 @@ def _render_message(digest: Digest, emails: list[Email], summary: str,
     parts.append(
         f"📬 <b>{esc(digest.name)}</b> · {date_str}\n"
         f"<b>{len(emails)}</b> new email(s)")
-    parts.append(f"<blockquote>{esc(summary)}</blockquote>")
+    parts.extend(_summary_body(digest, emails, summary, digest_mode))
     if digest.include_metadata:
         lines = ["──────────"]
         for e in emails:
@@ -225,7 +272,9 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
             if not token or not chat_id:
                 raise telegram.TelegramError(
                     "Telegram bot token / chat id not configured")
-            message = _render_message(digest, emails, summary, dry_run_prefix=False)
+            message = _render_message(
+                digest, emails, summary, dry_run_prefix=False,
+                digest_mode=settings.get("digest_mode") or "assemble")
             ids = await telegram.send_message(token, str(chat_id), message)
             run.telegram_message_id = ",".join(ids)
             app_state.telegram_status = "ok"

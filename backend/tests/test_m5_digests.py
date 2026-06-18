@@ -427,18 +427,20 @@ def test_render_message_uses_digest_timezone():
     assert "<i>18:30</i>" in msg          # invalid tz falls back to UTC
 
 
-def test_render_message_rich_formatting():
+def test_render_message_assemble_bullets():
     from app.services.digests import _render_message
 
     digest = Digest(name="News", timezone="UTC",
                     include_metadata=True, include_links=True)
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
+                  summary="Stocks fell 2%.",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], "the summary", dry_run_prefix=False)
+    msg = _render_message(digest, [email], "ignored", dry_run_prefix=False,
+                          digest_mode="assemble")
     assert "📬 <b>News</b>" in msg
     assert "<b>1</b> new email(s)" in msg
-    assert "<blockquote>the summary</blockquote>" in msg
-    assert "──────────" in msg
+    assert "• <b>Hello</b> — Stocks fell 2%." in msg
+    assert "<blockquote>" in msg
     assert '<a href="https://mail.google.com/mail/u/0/#all/m9">Hello</a>' in msg
 
 
@@ -460,7 +462,61 @@ def test_render_message_no_metadata_omits_list():
     digest = Digest(name="News", timezone="UTC",
                     include_metadata=False, include_links=True)
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
+                  summary="body text",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], "s", dry_run_prefix=False)
+    msg = _render_message(digest, [email], "ignored", dry_run_prefix=False,
+                          digest_mode="assemble")
     assert "──────────" not in msg
-    assert "<blockquote>s</blockquote>" in msg
+    assert "<blockquote>" in msg
+    assert "• <b>Hello</b> — body text" in msg
+
+
+def test_render_message_synthesize_tldr_above_blockquote():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="News", timezone="UTC",
+                    include_metadata=False, include_links=False)
+    summary = "TL;DR — two themes today.\nMarkets: stocks fell.\nOps: deploy ok."
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
+                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msg = _render_message(digest, [email], summary, dry_run_prefix=False,
+                          digest_mode="synthesize")
+    assert "<b>TL;DR — two themes today.</b>" in msg
+    after_bq = msg.split("<blockquote", 1)[1]
+    assert "TL;DR — two themes today." not in after_bq
+    assert "Markets: stocks fell." in after_bq
+    assert "Ops: deploy ok." in after_bq
+
+
+def test_render_message_expandable_when_long():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="News", timezone="UTC",
+                    include_metadata=False, include_links=False)
+    summary = "TL;DR.\n" + "\n".join(f"line {i}" for i in range(6))
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
+                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msg = _render_message(digest, [email], summary, dry_run_prefix=False,
+                          digest_mode="synthesize")
+    assert "<blockquote expandable>" in msg
+
+
+def test_render_message_short_blockquote_not_expandable():
+    from app.services.digests import _render_message
+
+    digest = Digest(name="News", timezone="UTC",
+                    include_metadata=False, include_links=False)
+    summary = "TL;DR.\nshort rest."
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
+                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msg = _render_message(digest, [email], summary, dry_run_prefix=False,
+                          digest_mode="synthesize")
+    assert "<blockquote>" in msg
+    assert "expandable" not in msg
+
+
+def test_normalize_summary_collapses_whitespace():
+    from app.services.digests import _normalize_summary
+
+    raw = "line one   \n\n\n\nline two\n\n"
+    assert _normalize_summary(raw) == "line one\n\nline two"
