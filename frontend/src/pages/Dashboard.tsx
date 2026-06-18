@@ -109,7 +109,7 @@ export default function Dashboard() {
               <h4>Processed</h4>
               <div className="card-rows">
                 <div className="card-row">
-                  <span>Today</span>
+                  <span>24 hours</span>
                   <span className="num">{stats.today.processed}</span>
                 </div>
                 <div className="card-row">
