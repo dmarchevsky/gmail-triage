@@ -57,6 +57,7 @@ export const EVENT_LABELS: Record<string, string> = {
   actions_executed: "Actions applied",
   actions_planned: "Actions planned (dry-run)",
   actions_failed: "Actions failed",
+  classification_failed: "Classification failed",
 };
 
 // Turn a snake_case event_type into a readable title when not in EVENT_LABELS.
@@ -107,6 +108,8 @@ const FORMATTERS: Record<string, (p: Payload) => string> = {
     return `${planned || "no actions"} (dry-run) — ${emailRef(p)}`;
   },
   actions_failed: (p) => `${emailRef(p)} failed: ${p.error ?? "unknown error"}`,
+  classification_failed: (p) =>
+    `${emailRef(p)} failed: ${p.error ?? "unknown error"}`,
   feedback_created: (p) => `Re: ${emailRef(p)}`,
   quick_label_created: (p) => `Quick label via ${ruleRef(p)}`,
   rule_updated: (p) => ruleRef(p),

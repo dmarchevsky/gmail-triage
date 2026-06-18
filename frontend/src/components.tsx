@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
+import { EmailAction } from "./api";
 
 const ACTION_LABELS: Record<string, string> = {
   add_label: "Add label",
@@ -80,6 +81,50 @@ export function Badge({
   tone?: "ok" | "warn" | "error" | "neutral" | "dry" | "info";
 }) {
   return <span className={`badge ${tone}`}>{children}</span>;
+}
+
+// Non-label action → badge tone. Labels are rendered as colored LabelPills;
+// every other action gets a distinct, tone-coded badge.
+const ACTION_TONE: Record<string, "ok" | "warn" | "error" | "neutral" | "info"> = {
+  archive: "info",
+  mark_read: "neutral",
+  trash: "error",
+  remove_label: "warn",
+};
+
+// Render an email's actions as badges: add_label → colored LabelPill, all other
+// actions → tone-coded Badge. Deduped by type+label so an email actioned by
+// several rules doesn't show repeated identical badges.
+export function ActionBadges({ actions }: { actions: EmailAction[] }) {
+  if (actions.length === 0) return <>—</>;
+  const seen = new Set<string>();
+  const pills: ReactNode[] = [];
+  const badges: ReactNode[] = [];
+  for (const a of actions) {
+    const lname = a.action_params?.label_name as string | undefined;
+    const key = `${a.action_type}:${lname ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (a.action_type === "add_label" && lname) {
+      pills.push(
+        <LabelPill
+          key={key}
+          name={lname}
+          textColor={a.action_params?.text_color as string | null}
+          backgroundColor={a.action_params?.background_color as string | null}
+        />,
+      );
+    } else if (a.action_type === "remove_label" && lname) {
+      badges.push(<Badge key={key} tone="warn">Remove: {lname}</Badge>);
+    } else {
+      badges.push(
+        <Badge key={key} tone={ACTION_TONE[a.action_type] ?? "neutral"}>
+          {actionLabel(a.action_type)}
+        </Badge>,
+      );
+    }
+  }
+  return <span className="action-badges">{pills}{badges}</span>;
 }
 
 export function Modal({

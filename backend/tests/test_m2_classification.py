@@ -432,3 +432,30 @@ def test_classify_marks_error_when_message_deleted(auth_client, db_session, seed
     email = db_session.query(Email).one()
     assert email.status == "error"
     assert "no longer available" in email.error
+
+
+@respx.mock
+def test_classification_failure_logged_to_audit(auth_client, db_session, seeded, monkeypatch):
+    """A classification failure (here: LLM timeout) is recorded in the audit log
+    so it surfaces in the dashboard Recent activity feed, not only the email
+    detail modal."""
+    mock_gmail_full(seeded)
+    from app.services import classifier, llm
+
+    async def timeout(*args, **kwargs):
+        raise llm.LLMTimeout("deadline exceeded")
+
+    monkeypatch.setattr(classifier.llm, "chat_json", timeout)
+
+    resp = auth_client.post("/api/v1/classify/run-now")
+    assert resp.json()["errors"] == 1
+
+    from app.models import AuditLog, Email
+    email = db_session.query(Email).one()
+    assert email.status == "error"
+    row = (db_session.query(AuditLog)
+           .filter(AuditLog.event_type == "classification_failed").one())
+    assert row.actor == "system"
+    assert row.payload["email_id"] == email.id
+    assert row.payload["reason"] == "timeout"
+    assert "deadline exceeded" in row.payload["error"]

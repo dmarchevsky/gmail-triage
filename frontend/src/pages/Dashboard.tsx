@@ -106,21 +106,16 @@ export default function Dashboard() {
         <>
           <div className="cards">
             <div className="card">
-              <h4>Today</h4>
-              <div className="big">{stats.today.processed}</div>
-              <div className="sub">
-                processed · {stats.today.actions_executed} executed
-                {stats.today.actions_planned_dry_run > 0 &&
-                  ` · ${stats.today.actions_planned_dry_run} planned (dry-run)`}
-              </div>
-            </div>
-            <div className="card">
-              <h4>Last 7 days</h4>
-              <div className="big">{stats.week.processed}</div>
-              <div className="sub">
-                processed · {stats.week.actions_executed} executed
-                {stats.week.actions_planned_dry_run > 0 &&
-                  ` · ${stats.week.actions_planned_dry_run} planned (dry-run)`}
+              <h4>Processed</h4>
+              <div className="card-rows">
+                <div className="card-row">
+                  <span>Today</span>
+                  <span className="num">{stats.today.processed}</span>
+                </div>
+                <div className="card-row">
+                  <span>Last 7 days</span>
+                  <span className="num">{stats.week.processed}</span>
+                </div>
               </div>
             </div>
             <div className="card">
@@ -217,11 +212,11 @@ export default function Dashboard() {
             <table className="table precision-table">
               <thead>
                 <tr>
-                  <th>Category</th>
-                  <th>Classified (1d)</th>
-                  <th>Classified (7d)</th>
-                  <th>Flagged wrong (7d)</th>
-                  <th>Precision (7d)</th>
+                  <th><span className="th-full">Category</span><span className="th-abbr">Cat.</span></th>
+                  <th><span className="th-full">Classified (1d)</span><span className="th-abbr">1d</span></th>
+                  <th><span className="th-full">Classified (7d)</span><span className="th-abbr">7d</span></th>
+                  <th><span className="th-full">Flagged wrong (7d)</span><span className="th-abbr">Wrong</span></th>
+                  <th><span className="th-full">Precision (7d)</span><span className="th-abbr">Prec.</span></th>
                 </tr>
               </thead>
               <tbody>

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.logging_setup import get_logger
 from app.models import Category, DigestRun, DigestRunStatus, Email, EmailStatus
 from app.services import llm, settings_service
+from app.services.audit import audit
 from app.services.gmail import GmailAuthError, GmailClient, GmailNotFound
 from app.services.matchers import sender_matches
 from app.state import app_state
@@ -35,6 +36,17 @@ _ERROR_RETRY_EVERY = 10  # retry `error` emails every Nth sweep (~10 min)
 # tokens before emitting any summary text — too small a cap yields an empty
 # (truncated) response and the digest then falls back to the raw snippet.
 _SUMMARY_MAX_TOKENS = {"concise": 512, "default": 768, "extended": 1024}
+
+
+def _audit_classification_failed(session: Session, email: Email,
+                                 reason: str, error: str | None) -> None:
+    """Record a classification failure in the audit log so it appears in the
+    dashboard Recent activity feed (not only the email detail modal). `reason`
+    is a short stable code: timeout | invalid_output | gmail_not_found |
+    gmail_auth | stalled."""
+    audit(session, "system", "classification_failed",
+          {"email_id": email.id, "reason": reason, "error": (error or "")[:300]})
+
 
 CLASSIFICATION_SCHEMA_TEMPLATE = {
     "type": "object",
@@ -131,6 +143,7 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
         # so the recovery sweep doesn't retry it (and re-hit Gmail) every cycle.
         email.attempts = max(email.attempts or 0,
                              int(settings.get("classify_max_attempts") or 5))
+        _audit_classification_failed(session, email, "gmail_not_found", email.error)
         return
     session.commit()  # release the body-hash write before the LLM await
     system, user, schema = build_classification_prompt(
@@ -147,10 +160,12 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
     except llm.LLMInvalidOutput as e:
         email.status = EmailStatus.error.value
         email.error = f"LLM output invalid after retry: {e}"
+        _audit_classification_failed(session, email, "invalid_output", email.error)
         return
     except llm.LLMTimeout as e:
         email.status = EmailStatus.error.value
         email.error = f"LLM timed out: {e}"
+        _audit_classification_failed(session, email, "timeout", email.error)
         return
 
     name = result["category"]
@@ -298,6 +313,7 @@ async def _process_next() -> bool:
             email.status = EmailStatus.error.value
             email.error = "Gmail auth expired"
             email.processing_started_at = None
+            _audit_classification_failed(session, email, "gmail_auth", email.error)
             session.commit()
             return True
 
@@ -357,6 +373,7 @@ def _recover_stalled_emails(session: Session, settings: dict) -> None:
         if (e.attempts or 0) >= max_attempts:
             e.status = EmailStatus.error.value
             e.error = f"Stalled in processing; gave up after {e.attempts} attempts"
+            _audit_classification_failed(session, e, "stalled", e.error)
             log.warning("stalled_email_failed", email_id=e.id, attempts=e.attempts)
         else:
             e.status = EmailStatus.pending.value

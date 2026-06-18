@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Category, EmailAction, EmailList, EmailRow, StatusResponse, errMsg, get, post } from "../api";
-import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, actionLabel, conf, fmtDate } from "../components";
+import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, ActionBadges, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
 function statusTone(status: string): "ok" | "warn" | "error" | "neutral" | "info" {
@@ -518,11 +518,7 @@ export default function Emails() {
                 <Badge tone={statusTone(e.status)}>{e.status}</Badge>{" "}
                 {e.dry_run && e.actions.length > 0 && <Badge tone="dry">dry</Badge>}
               </td>
-              <td data-label="Actions">{e.actions.map((a) => {
-                const base = actionLabel(a.action_type);
-                const lname = a.action_params?.label_name as string | undefined;
-                return lname ? `${base} → ${lname}` : base;
-              }).join(", ") || "—"}</td>
+              <td data-label="Actions"><ActionBadges actions={e.actions} /></td>
             </tr>
           ))}
           {list && list.items.length === 0 && (

@@ -381,6 +381,29 @@ code {
   font-weight: 700;
 }
 
+.card-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.card-row > span:first-child {
+  color: var(--muted);
+}
+
+.card-row .num {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
 .sub {
   color: var(--muted);
   font-size: 0.85rem;
@@ -417,6 +440,11 @@ code {
   font-weight: 600;
   font-size: 0.78rem;
   text-transform: uppercase;
+}
+
+/* Mobile-only abbreviated column headers (see precision-table mobile block). */
+.th-abbr {
+  display: none;
 }
 
 .table tr:last-child td {
@@ -866,6 +894,13 @@ label.checkbox input {
   margin-top: 0;
 }
 
+.action-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
 /* labels */
 .label-pill {
   display: inline-block;
@@ -1236,6 +1271,7 @@ label.checkbox input {
 
   /* badge cells read fine without a label */
   .emails-table td[data-label="Status"]::before,
+  .emails-table td[data-label="Actions"]::before,
   .rules-table td[data-label="Mode"]::before,
   .rules-table td[data-label="Enabled"]::before,
   .categories-table td[data-label="Enabled"]::before,
@@ -1311,5 +1347,66 @@ label.checkbox input {
   input[type="checkbox"] {
     width: 18px;
     height: 18px;
+  }
+
+  /* Categories (precision) table stays a compact, full-width table on mobile —
+     abbreviated headers + small type instead of collapsing into stacked cards,
+     and it must fit the viewport with no horizontal scroll. The doubled class
+     beats the generic .table collapse rules above. */
+  .precision-table.precision-table {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+    border: 1px solid var(--border);
+    background: var(--card);
+    font-size: 0.72rem;
+  }
+  .precision-table.precision-table thead {
+    display: table-header-group;
+  }
+  .precision-table.precision-table tbody {
+    display: table-row-group;
+  }
+  .precision-table.precision-table tr {
+    display: table-row;
+    border: none;
+    background: transparent;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+  }
+  .precision-table.precision-table th,
+  .precision-table.precision-table td {
+    display: table-cell;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0.3rem 0.35rem;
+    font-size: 0.72rem;
+    font-weight: normal;
+  }
+  .precision-table.precision-table td::before {
+    content: none;
+  }
+  .precision-table.precision-table .th-full {
+    display: none;
+  }
+  .precision-table.precision-table .th-abbr {
+    display: inline;
+  }
+  .precision-table.precision-table td:first-child,
+  .precision-table.precision-table th:first-child {
+    width: 34%;
+    white-space: normal;
+    text-align: left;
+    padding-right: 0.35rem;
+  }
+  .precision-table.precision-table td:not(:first-child),
+  .precision-table.precision-table th:not(:first-child) {
+    width: 16.5%;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .precision-table.precision-table tr:last-child td {
+    border-bottom: none;
   }
 }
