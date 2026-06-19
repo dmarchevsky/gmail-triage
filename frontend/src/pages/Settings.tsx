@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { GmailLabel, Settings, del, errMsg, get, post, put } from "../api";
 import { AsyncButton, Badge, ConfirmDialog } from "../components";
 import { useToast } from "../toast";
 import { useApp } from "../App";
+
+/** Shared state handed to the prop-driven section components. */
+interface IngestionProps {
+  settings: Settings;
+  draft: Record<string, string>;
+  setDraft: (d: Record<string, string>) => void;
+  saveValues: (values: Record<string, unknown>) => Promise<void>;
+}
 
 function MailboxScope({
   settings,
@@ -15,13 +24,17 @@ function MailboxScope({
   const [labels, setLabels] = useState<GmailLabel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>(settings.poll_scope_labels);
+  const [ignore, setIgnore] = useState<string>(settings.ignore_senders.join("\n"));
 
-  // Re-sync from the prop when the persisted scope actually changes (e.g. after
+  // Re-sync from the prop when the persisted value actually changes (e.g. after
   // a save/import elsewhere) — keyed on the joined value so an unrelated parent
-  // re-render doesn't reset an in-progress selection.
+  // re-render doesn't reset an in-progress edit.
   useEffect(() => {
     setSelected(settings.poll_scope_labels);
   }, [settings.poll_scope_labels.join(",")]);
+  useEffect(() => {
+    setIgnore(settings.ignore_senders.join("\n"));
+  }, [settings.ignore_senders.join("\n")]);
 
   useEffect(() => {
     get<GmailLabel[]>("/gmail/labels")
@@ -75,11 +88,173 @@ function MailboxScope({
           </button>
         </>
       )}
+      <div className="form-grid" style={{ marginTop: "1rem" }}>
+        <label className="span2">
+          Ignored senders (one glob/regex per line; skipped before the LLM)
+          <textarea
+            rows={3}
+            value={ignore}
+            onChange={(e) => setIgnore(e.target.value)}
+          />
+        </label>
+      </div>
+      <button
+        className="primary"
+        onClick={() =>
+          onSave({
+            ignore_senders: ignore
+              .split("\n")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          })
+        }
+      >
+        Save ignored senders
+      </button>
     </div>
   );
 }
 
-export function GmailConnect({ onChange }: { onChange?: () => void }) {
+/** Ingestion mode + store-bodies + mode-conditional config, shown inside the
+ *  Gmail card once connected. */
+function IngestionControls({ settings, draft, setDraft, saveValues }: IngestionProps) {
+  const { status } = useApp();
+  const mode = settings.gmail_ingest_mode;
+  const val = (key: keyof Settings) =>
+    draft[key] !== undefined ? draft[key] : String(settings[key] ?? "");
+
+  return (
+    <div className="ingestion-config">
+      <div className="form-grid">
+        <label className="checkbox span2" style={{ marginBottom: "0.75rem" }}>
+          <input
+            type="checkbox"
+            checked={settings.store_bodies}
+            onChange={(e) => saveValues({ store_bodies: e.target.checked })}
+          />
+          Store email bodies in DB (default off — bodies are re-fetched from Gmail when needed)
+        </label>
+        <label>
+          Ingestion mode
+          <select
+            value={mode}
+            onChange={(e) => saveValues({ gmail_ingest_mode: e.target.value })}
+          >
+            <option value="poll">Polling</option>
+            <option value="push">Push (Pub/Sub pull)</option>
+          </select>
+        </label>
+      </div>
+
+      {mode === "poll" ? (
+        <>
+          <div className="form-grid">
+            <label>
+              Polling interval (seconds, min 60)
+              <input
+                type="number"
+                placeholder="300"
+                value={val("poll_interval_seconds")}
+                onChange={(e) =>
+                  setDraft({ ...draft, poll_interval_seconds: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              Initial lookback (hours; 0 = only new mail)
+              <input
+                type="number"
+                placeholder="24"
+                value={val("initial_lookback_hours")}
+                onChange={(e) =>
+                  setDraft({ ...draft, initial_lookback_hours: e.target.value })
+                }
+              />
+            </label>
+          </div>
+          <button
+            className="primary"
+            onClick={() => {
+              const values: Record<string, unknown> = {};
+              if (draft.poll_interval_seconds !== undefined)
+                values.poll_interval_seconds = Number(draft.poll_interval_seconds);
+              if (draft.initial_lookback_hours !== undefined)
+                values.initial_lookback_hours = Number(draft.initial_lookback_hours);
+              saveValues(values);
+            }}
+          >
+            Save polling settings
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="sub">
+            Real-time via Gmail <code>watch</code> + a Cloud Pub/Sub <b>pull</b>
+            {" "}subscription — outbound-only, no inbound endpoint. Polling keeps
+            running as a safety net. See the README for the one-time Google Cloud
+            setup (topic, pull subscription, IAM). Consumer:{" "}
+            <Badge
+              tone={
+                status?.ingest.pubsub_status === "running"
+                  ? "ok"
+                  : status?.ingest.pubsub_status === "error"
+                    ? "error"
+                    : "neutral"
+              }
+            >
+              {status?.ingest.pubsub_status ?? "stopped"}
+            </Badge>
+          </p>
+          <div className="form-grid">
+            <label className="span2">
+              Pub/Sub topic (full resource name)
+              <input
+                placeholder="projects/my-project/topics/gmail-triage"
+                value={val("gmail_pubsub_topic")}
+                onChange={(e) => setDraft({ ...draft, gmail_pubsub_topic: e.target.value })}
+              />
+            </label>
+            <label className="span2">
+              Pub/Sub pull subscription (full resource name)
+              <input
+                placeholder="projects/my-project/subscriptions/gmail-triage-sub"
+                value={val("gmail_pubsub_subscription")}
+                onChange={(e) =>
+                  setDraft({ ...draft, gmail_pubsub_subscription: e.target.value })
+                }
+              />
+            </label>
+          </div>
+          <p className="sub">
+            After saving, <b>reconnect Gmail</b> above so consent also grants the
+            (non-send) <code>pubsub</code> scope.
+          </p>
+          <button
+            className="primary"
+            onClick={() => {
+              const values: Record<string, unknown> = {};
+              if (draft.gmail_pubsub_topic !== undefined)
+                values.gmail_pubsub_topic = draft.gmail_pubsub_topic.trim();
+              if (draft.gmail_pubsub_subscription !== undefined)
+                values.gmail_pubsub_subscription = draft.gmail_pubsub_subscription.trim();
+              saveValues(values);
+            }}
+          >
+            Save Pub/Sub settings
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function GmailConnect({
+  onChange,
+  ingestion,
+}: {
+  onChange?: () => void;
+  ingestion?: IngestionProps;
+}) {
   const { status, refresh } = useApp();
   const toast = useToast();
   const [credsJson, setCredsJson] = useState("");
@@ -120,6 +295,7 @@ export function GmailConnect({ onChange }: { onChange?: () => void }) {
           <p className="sub">
             Scope: <code>gmail.modify</code> only — MailTriage cannot send email.
           </p>
+          {ingestion && <IngestionControls {...ingestion} />}
           <button
             className="danger"
             onClick={() => setDisconnecting(true)}
@@ -317,6 +493,14 @@ function AuthSection({
   );
 }
 
+const TABS: { id: string; label: string }[] = [
+  { id: "mailbox", label: "Mailbox" },
+  { id: "processing", label: "Processing" },
+  { id: "notifications", label: "Notifications" },
+  { id: "security", label: "Security" },
+  { id: "data", label: "Data" },
+];
+
 export default function SettingsPage() {
   const { refresh, status } = useApp();
   const toast = useToast();
@@ -326,6 +510,8 @@ export default function SettingsPage() {
   const [confirmingPurge, setConfirmingPurge] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [detectedContext, setDetectedContext] = useState<number | null>(null);
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") ?? "mailbox";
 
   const load = () => get<Settings>("/settings").then(setSettings);
   useEffect(() => {
@@ -351,10 +537,24 @@ export default function SettingsPage() {
     }
   };
 
-  const pollingFields: [keyof Settings, string, string][] = [
-    ["poll_interval_seconds", "Polling interval (seconds, min 60)", "300"],
-    ["initial_lookback_hours", "Initial lookback (hours; 0 = only new mail)", "24"],
-  ];
+  // Per-tab attention dot: surfaces a problem without opening the tab.
+  const tabDot = (id: string): string => {
+    if (!status) return "";
+    switch (id) {
+      case "mailbox":
+        if (!status.gmail.connected) return "warn";
+        if (status.gmail.status === "auth_error") return "error";
+        return status.poller.paused ? "warn" : "";
+      case "processing":
+        return status.llm.status === "unreachable" ? "error" : "";
+      case "notifications":
+        return status.telegram.status === "error" ? "error" : "";
+      case "security":
+        return settings.auth_disabled ? "warn" : "";
+      default:
+        return "";
+    }
+  };
 
   const llmFields: [keyof Settings, string, string][] = [
     ["classify_body_max_chars", "Body budget (chars; classify + summarize)", "2000"],
@@ -386,461 +586,357 @@ export default function SettingsPage() {
       <header className="page-head">
         <h2>Settings</h2>
       </header>
-      <GmailConnect onChange={load} />
 
-      <MailboxScope settings={settings} onSave={saveValues} />
-
-      <div className="settings-section">
-        <h3>
-          Ingestion mode{" "}
-          <Badge tone={settings.gmail_ingest_mode === "push" ? "info" : "neutral"}>
-            {settings.gmail_ingest_mode === "push" ? "push (real-time)" : "polling"}
-          </Badge>
-        </h3>
-        <p className="sub">
-          <b>Polling</b> checks Gmail every interval (below). <b>Push</b> uses
-          Gmail <code>watch</code> + a Cloud Pub/Sub <b>pull</b> subscription to
-          triage new mail within seconds — outbound-only, no inbound endpoint;
-          polling stays on as a safety net. See the README for the one-time Google
-          Cloud setup (topic, pull subscription, IAM).
-        </p>
-        <div className="form-grid">
-          <label>
-            Mode
-            <select
-              value={settings.gmail_ingest_mode}
-              onChange={(e) => saveValues({ gmail_ingest_mode: e.target.value })}
+      <nav className="settings-tabs">
+        {TABS.map((t) => {
+          const dot = tabDot(t.id);
+          return (
+            <button
+              key={t.id}
+              className={t.id === tab ? "active" : ""}
+              onClick={() => setParams({ tab: t.id }, { replace: true })}
             >
-              <option value="poll">Polling</option>
-              <option value="push">Push (Pub/Sub pull)</option>
-            </select>
-          </label>
-          <span />
-          <label className="span2">
-            Pub/Sub topic (full resource name)
-            <input
-              placeholder="projects/my-project/topics/gmail-triage"
-              value={
-                draft.gmail_pubsub_topic !== undefined
-                  ? draft.gmail_pubsub_topic
-                  : settings.gmail_pubsub_topic
-              }
-              onChange={(e) => setDraft({ ...draft, gmail_pubsub_topic: e.target.value })}
-            />
-          </label>
-          <label className="span2">
-            Pub/Sub pull subscription (full resource name)
-            <input
-              placeholder="projects/my-project/subscriptions/gmail-triage-sub"
-              value={
-                draft.gmail_pubsub_subscription !== undefined
-                  ? draft.gmail_pubsub_subscription
-                  : settings.gmail_pubsub_subscription
-              }
-              onChange={(e) =>
-                setDraft({ ...draft, gmail_pubsub_subscription: e.target.value })
-              }
-            />
-          </label>
-        </div>
-        {settings.gmail_ingest_mode === "push" && (
-          <p className="sub">
-            Push needs the <code>pubsub</code> scope: after saving the topic and
-            subscription, <b>reconnect Gmail</b> above to grant it. Consumer:{" "}
-            <Badge
-              tone={
-                status?.ingest.pubsub_status === "running"
-                  ? "ok"
-                  : status?.ingest.pubsub_status === "error"
-                    ? "error"
-                    : "neutral"
-              }
-            >
-              {status?.ingest.pubsub_status ?? "stopped"}
-            </Badge>
-          </p>
-        )}
-        <button
-          className="primary"
-          onClick={() => {
-            const values: Record<string, unknown> = {};
-            if (draft.gmail_pubsub_topic !== undefined)
-              values.gmail_pubsub_topic = draft.gmail_pubsub_topic.trim();
-            if (draft.gmail_pubsub_subscription !== undefined)
-              values.gmail_pubsub_subscription = draft.gmail_pubsub_subscription.trim();
-            saveValues(values);
-          }}
-        >
-          Save Pub/Sub settings
-        </button>
-      </div>
+              {dot && <span className={`status-dot ${dot}`} />}
+              {t.label}
+            </button>
+          );
+        })}
+      </nav>
 
-      <div className="settings-section">
-        <h3>Polling & processing</h3>
-        <div className="form-grid">
-          {pollingFields.map(([key, label, placeholder]) => (
-            <label key={key}>
-              {label}
-              <input
-                type="number"
-                placeholder={placeholder}
-                value={num(key)}
-                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-              />
-            </label>
-          ))}
-          <label className="checkbox span2">
-            <input
-              type="checkbox"
-              checked={settings.store_bodies}
-              onChange={(e) => saveValues({ store_bodies: e.target.checked })}
-            />
-            Store email bodies in DB (default off — bodies are re-fetched from Gmail
-            when needed)
-          </label>
-          <label className="span2">
-            Ignored senders (one glob/regex per line; skipped before the LLM)
-            <textarea
-              rows={3}
-              value={
-                draft.ignore_senders !== undefined
-                  ? draft.ignore_senders
-                  : settings.ignore_senders.join("\n")
-              }
-              onChange={(e) => setDraft({ ...draft, ignore_senders: e.target.value })}
-            />
-          </label>
-        </div>
-        <button
-          className="primary"
-          onClick={() => {
-            const values: Record<string, unknown> = {};
-            for (const [key] of pollingFields)
-              if (draft[key] !== undefined) values[key] = Number(draft[key]);
-            if (draft.ignore_senders !== undefined)
-              values.ignore_senders = draft.ignore_senders
-                .split("\n")
-                .map((s) => s.trim())
-                .filter(Boolean);
-            saveValues(values);
-          }}
-        >
-          Save processing settings
-        </button>
-      </div>
+      {tab === "mailbox" && (
+        <>
+          <GmailConnect
+            onChange={load}
+            ingestion={{ settings, draft, setDraft, saveValues }}
+          />
+          <MailboxScope settings={settings} onSave={saveValues} />
+        </>
+      )}
 
-      <div className="settings-section">
-        <h3>
-          LLM Processing{" "}
-          <Badge tone={status?.llm.status === "ok" ? "ok" : "warn"}>
-            {status?.llm.status === "ok" ? "reachable" : (status?.llm.status ?? "unknown")}
-          </Badge>
-        </h3>
-        <div className="form-grid">
-          <label>
-            Base URL (empty = LLM_BASE_URL env)
-            <input
-              placeholder="http://host.docker.internal:8081/v1"
-              value={draft.llm_base_url !== undefined ? draft.llm_base_url : settings.llm_base_url}
-              onChange={(e) => setDraft({ ...draft, llm_base_url: e.target.value })}
-            />
-          </label>
-          <label>
-            Model name (ignored by single-model llama.cpp)
-            <input
-              value={draft.llm_model !== undefined ? draft.llm_model : settings.llm_model}
-              onChange={(e) => setDraft({ ...draft, llm_model: e.target.value })}
-            />
-          </label>
-          {llmFields.map(([key, label, placeholder]) => (
-            <label key={key}>
-              {label}
-              <input
-                type="number"
-                placeholder={placeholder}
-                value={num(key)}
-                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-              />
-            </label>
-          ))}
-          <label>
-            Summarization depth (applied to newly-classified emails)
-            <select
-              value={settings.summarization_depth}
-              onChange={(e) => saveValues({ summarization_depth: e.target.value })}
-            >
-              <option value="concise">Concise — one short line</option>
-              <option value="default">Default — 1-2 sentences</option>
-              <option value="extended">Extended — short paragraph</option>
-            </select>
-          </label>
-          <label>
-            Digest mode
-            <select
-              value={settings.digest_mode}
-              onChange={(e) => saveValues({ digest_mode: e.target.value })}
-            >
-              <option value="assemble">Assemble — list saved summaries (no LLM)</option>
-              <option value="synthesize">Synthesize — one LLM call combines them</option>
-            </select>
-          </label>
-        </div>
-        <div className="head-actions">
-          <button
-            className="primary"
-            onClick={() => {
-              const values: Record<string, unknown> = {};
-              if (draft.llm_base_url !== undefined) values.llm_base_url = draft.llm_base_url;
-              if (draft.llm_model !== undefined) values.llm_model = draft.llm_model;
-              for (const [key] of llmFields)
-                if (draft[key] !== undefined) values[key] = Number(draft[key]);
-              saveValues(values);
-            }}
-          >
-            Save LLM settings
-          </button>
-          <AsyncButton
-            onClick={async () => {
-              const r = await post<{ ok: boolean; error?: string; models?: string[] }>(
-                "/llm/test",
-              );
-              if (r.ok) toast.success(`LLM OK — models: ${r.models?.join(", ")}`);
-              else toast.error(`LLM unreachable: ${r.error}`);
-            }}
-          >
-            Test LLM connection
-          </AsyncButton>
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3>LLM Prompts</h3>
-        <div className="form-grid">
-          {promptFields.map(([key, label]) => (
-            <label key={key} className="span2">
-              {label}
-              <textarea
-                rows={5}
-                value={num(key)}
-                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-              />
-            </label>
-          ))}
-        </div>
-        <button
-          className="primary"
-          onClick={() => {
-            const values: Record<string, unknown> = {};
-            for (const [key] of promptFields)
-              if (draft[key] !== undefined) values[key] = draft[key];
-            saveValues(values);
-          }}
-        >
-          Save prompts
-        </button>
-      </div>
-
-      <div className="settings-section">
-        <h3>
-          Telegram{" "}
-          {!settings.telegram_bot_token_configured ? (
-            <Badge tone="warn">not configured</Badge>
-          ) : (
-            <Badge tone={status?.telegram.status === "ok" ? "ok" : "warn"}>
-              {status?.telegram.status === "ok"
-                ? "configured"
-                : (status?.telegram.status ?? "configured")}
-            </Badge>
-          )}
-        </h3>
-        <div className="form-grid">
-          <label>
-            Bot token
-            <input
-              type="password"
-              placeholder="123456:ABC-DEF…"
-              value={telegramToken}
-              onChange={(e) => setTelegramToken(e.target.value)}
-            />
-          </label>
-          <label>
-            Default chat id
-            <input
-              value={
-                draft.telegram_default_chat_id !== undefined
-                  ? draft.telegram_default_chat_id
-                  : settings.telegram_default_chat_id
-              }
-              onChange={(e) =>
-                setDraft({ ...draft, telegram_default_chat_id: e.target.value })
-              }
-            />
-          </label>
-        </div>
-        <div className="head-actions">
-          <button
-            className="primary"
-            onClick={() => {
-              const values: Record<string, unknown> = {};
-              if (telegramToken) values.telegram_bot_token = telegramToken;
-              if (draft.telegram_default_chat_id !== undefined)
-                values.telegram_default_chat_id = draft.telegram_default_chat_id;
-              saveValues(values).then(() => setTelegramToken(""));
-            }}
-          >
-            Save Telegram settings
-          </button>
-          <AsyncButton
-            onClick={async () => {
-              try {
-                const r = await post<{ ok: boolean; error?: string }>("/telegram/test");
-                if (r.ok) toast.success("Telegram test message sent");
-                else toast.error(`Telegram failed: ${r.error}`);
-              } catch (e) {
-                toast.error(`Telegram failed: ${e instanceof Error ? e.message : e}`);
-              }
-              await refresh();
-            }}
-          >
-            Send test message
-          </AsyncButton>
-        </div>
-      </div>
-
-      <AuthSection
-        settings={settings}
-        onChange={async () => {
-          await load();
-          await refresh();
-        }}
-      />
-
-      <div className="settings-section">
-        <h3>Config export / import</h3>
-        <p className="sub">Full configuration as JSON, excluding secrets.</p>
-        <div className="head-actions">
-          <AsyncButton
-            onClick={async () => {
-              const data = await get<Record<string, unknown>>("/settings");
-              const blob = new Blob([JSON.stringify(data, null, 2)], {
-                type: "application/json",
-              });
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = "mailtriage-settings.json";
-              a.click();
-            }}
-          >
-            Export settings JSON
-          </AsyncButton>
-          <label className="checkbox">
-            Import:
-            <input
-              type="file"
-              accept="application/json"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                try {
-                  const parsed = JSON.parse(await file.text());
-                  const r = await post<{ imported: string[] }>(
-                    "/settings/import",
-                    parsed,
+      {tab === "processing" && (
+        <>
+          <div className="settings-section">
+            <h3>
+              LLM Processing{" "}
+              <Badge tone={status?.llm.status === "ok" ? "ok" : "warn"}>
+                {status?.llm.status === "ok" ? "reachable" : (status?.llm.status ?? "unknown")}
+              </Badge>
+            </h3>
+            <div className="form-grid">
+              <label>
+                Base URL (empty = LLM_BASE_URL env)
+                <input
+                  placeholder="http://host.docker.internal:8081/v1"
+                  value={draft.llm_base_url !== undefined ? draft.llm_base_url : settings.llm_base_url}
+                  onChange={(e) => setDraft({ ...draft, llm_base_url: e.target.value })}
+                />
+              </label>
+              <label>
+                Model name (ignored by single-model llama.cpp)
+                <input
+                  value={draft.llm_model !== undefined ? draft.llm_model : settings.llm_model}
+                  onChange={(e) => setDraft({ ...draft, llm_model: e.target.value })}
+                />
+              </label>
+              {llmFields.map(([key, label, placeholder]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    type="number"
+                    placeholder={placeholder}
+                    value={num(key)}
+                    onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+                  />
+                </label>
+              ))}
+              <label>
+                Summarization depth (applied to newly-classified emails)
+                <select
+                  value={settings.summarization_depth}
+                  onChange={(e) => saveValues({ summarization_depth: e.target.value })}
+                >
+                  <option value="concise">Concise — one short line</option>
+                  <option value="default">Default — 1-2 sentences</option>
+                  <option value="extended">Extended — short paragraph</option>
+                </select>
+              </label>
+              <label>
+                Digest mode
+                <select
+                  value={settings.digest_mode}
+                  onChange={(e) => saveValues({ digest_mode: e.target.value })}
+                >
+                  <option value="assemble">Assemble — list saved summaries (no LLM)</option>
+                  <option value="synthesize">Synthesize — one LLM call combines them</option>
+                </select>
+              </label>
+            </div>
+            <div className="head-actions">
+              <button
+                className="primary"
+                onClick={() => {
+                  const values: Record<string, unknown> = {};
+                  if (draft.llm_base_url !== undefined) values.llm_base_url = draft.llm_base_url;
+                  if (draft.llm_model !== undefined) values.llm_model = draft.llm_model;
+                  for (const [key] of llmFields)
+                    if (draft[key] !== undefined) values[key] = Number(draft[key]);
+                  saveValues(values);
+                }}
+              >
+                Save LLM settings
+              </button>
+              <AsyncButton
+                onClick={async () => {
+                  const r = await post<{ ok: boolean; error?: string; models?: string[] }>(
+                    "/llm/test",
                   );
-                  toast.success(`Imported: ${r.imported.join(", ")}`);
-                  load();
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : String(err));
-                }
-                e.target.value = "";
+                  if (r.ok) toast.success(`LLM OK — models: ${r.models?.join(", ")}`);
+                  else toast.error(`LLM unreachable: ${r.error}`);
+                }}
+              >
+                Test LLM connection
+              </AsyncButton>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <h3>LLM Prompts</h3>
+            <div className="form-grid">
+              {promptFields.map(([key, label]) => (
+                <label key={key} className="span2">
+                  {label}
+                  <textarea
+                    rows={5}
+                    value={num(key)}
+                    onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+                  />
+                </label>
+              ))}
+            </div>
+            <button
+              className="primary"
+              onClick={() => {
+                const values: Record<string, unknown> = {};
+                for (const [key] of promptFields)
+                  if (draft[key] !== undefined) values[key] = draft[key];
+                saveValues(values);
               }}
-            />
-          </label>
-        </div>
-      </div>
+            >
+              Save prompts
+            </button>
+          </div>
+        </>
+      )}
 
-      <div className="settings-section danger-zone">
-        <h3>Danger zone</h3>
-        <p className="sub">
-          Both operations only touch MailTriage's local database — nothing in your
-          Gmail changes (labels already applied stay).
-        </p>
-        <div className="head-actions">
-          <button className="danger" onClick={() => setConfirmingPurge(true)}>
-            Purge processing data
-          </button>
-          <button className="danger" onClick={() => setConfirmingReset(true)}>
-            Factory reset
-          </button>
+      {tab === "notifications" && (
+        <div className="settings-section">
+          <h3>
+            Telegram{" "}
+            {!settings.telegram_bot_token_configured ? (
+              <Badge tone="warn">not configured</Badge>
+            ) : (
+              <Badge tone={status?.telegram.status === "ok" ? "ok" : "warn"}>
+                {status?.telegram.status === "ok"
+                  ? "configured"
+                  : (status?.telegram.status ?? "configured")}
+              </Badge>
+            )}
+          </h3>
+          <div className="form-grid">
+            <label>
+              Bot token
+              <input
+                type="password"
+                placeholder="123456:ABC-DEF…"
+                value={telegramToken}
+                onChange={(e) => setTelegramToken(e.target.value)}
+              />
+            </label>
+            <label>
+              Default chat id
+              <input
+                value={
+                  draft.telegram_default_chat_id !== undefined
+                    ? draft.telegram_default_chat_id
+                    : settings.telegram_default_chat_id
+                }
+                onChange={(e) =>
+                  setDraft({ ...draft, telegram_default_chat_id: e.target.value })
+                }
+              />
+            </label>
+          </div>
+          <div className="head-actions">
+            <button
+              className="primary"
+              onClick={() => {
+                const values: Record<string, unknown> = {};
+                if (telegramToken) values.telegram_bot_token = telegramToken;
+                if (draft.telegram_default_chat_id !== undefined)
+                  values.telegram_default_chat_id = draft.telegram_default_chat_id;
+                saveValues(values).then(() => setTelegramToken(""));
+              }}
+            >
+              Save Telegram settings
+            </button>
+            <AsyncButton
+              onClick={async () => {
+                try {
+                  const r = await post<{ ok: boolean; error?: string }>("/telegram/test");
+                  if (r.ok) toast.success("Telegram test message sent");
+                  else toast.error(`Telegram failed: ${r.error}`);
+                } catch (e) {
+                  toast.error(`Telegram failed: ${e instanceof Error ? e.message : e}`);
+                }
+                await refresh();
+              }}
+            >
+              Send test message
+            </AsyncButton>
+          </div>
         </div>
-      </div>
+      )}
 
-      {confirmingPurge && (
-        <ConfirmDialog
-          title="Purge processing data?"
-          danger
-          confirmLabel="Purge data"
-          message={
-            <>
-              <p>
-                <b>Deletes:</b> all ingested emails and their classifications,
-                planned/executed action records, digest run history, feedback, and
-                the audit log.
-              </p>
-              <p>
-                <b>Keeps:</b> Gmail connection, categories, rules, digests, and
-                settings.
-              </p>
-              <p>
-                The sync watermark is reset, so the next poll re-ingests and
-                re-classifies the initial-lookback window like a first run.
-              </p>
-            </>
-          }
-          onConfirm={async () => {
-            setConfirmingPurge(false);
-            try {
-              const r = await post<{ deleted: Record<string, number> }>(
-                "/admin/purge-data",
-              );
-              toast.success(
-                `Purged: ${Object.entries(r.deleted)
-                  .map(([table, n]) => `${table} ${n}`)
-                  .join(", ")}`,
-              );
-              await refresh();
-            } catch (e) {
-              toast.error(errMsg(e));
-            }
+      {tab === "security" && (
+        <AuthSection
+          settings={settings}
+          onChange={async () => {
+            await load();
+            await refresh();
           }}
-          onCancel={() => setConfirmingPurge(false)}
         />
       )}
-      {confirmingReset && (
-        <ConfirmDialog
-          title="Factory reset?"
-          danger
-          confirmLabel="Reset everything"
-          message={
-            <p>
-              <b>Everything</b> is deleted: the Gmail connection is revoked and
-              removed, and all emails, categories (with criteria history), rules,
-              digests, feedback and settings are wiped. You'll be taken back to the
-              first-run wizard. This cannot be undone.
+
+      {tab === "data" && (
+        <>
+          <div className="settings-section">
+            <h3>Config export / import</h3>
+            <p className="sub">Full configuration as JSON, excluding secrets.</p>
+            <div className="head-actions">
+              <AsyncButton
+                onClick={async () => {
+                  const data = await get<Record<string, unknown>>("/settings");
+                  const blob = new Blob([JSON.stringify(data, null, 2)], {
+                    type: "application/json",
+                  });
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = "mailtriage-settings.json";
+                  a.click();
+                }}
+              >
+                Export settings JSON
+              </AsyncButton>
+              <label className="checkbox">
+                Import:
+                <input
+                  type="file"
+                  accept="application/json"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const parsed = JSON.parse(await file.text());
+                      const r = await post<{ imported: string[] }>(
+                        "/settings/import",
+                        parsed,
+                      );
+                      toast.success(`Imported: ${r.imported.join(", ")}`);
+                      load();
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : String(err));
+                    }
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="settings-section danger-zone">
+            <h3>Danger zone</h3>
+            <p className="sub">
+              Both operations only touch MailTriage's local database — nothing in your
+              Gmail changes (labels already applied stay).
             </p>
-          }
-          onConfirm={async () => {
-            setConfirmingReset(false);
-            try {
-              await post("/admin/factory-reset");
-              toast.success("Factory reset complete");
-              await refresh();
-            } catch (e) {
-              toast.error(errMsg(e));
-            }
-          }}
-          onCancel={() => setConfirmingReset(false)}
-        />
+            <div className="head-actions">
+              <button className="danger" onClick={() => setConfirmingPurge(true)}>
+                Purge processing data
+              </button>
+              <button className="danger" onClick={() => setConfirmingReset(true)}>
+                Factory reset
+              </button>
+            </div>
+          </div>
+
+          {confirmingPurge && (
+            <ConfirmDialog
+              title="Purge processing data?"
+              danger
+              confirmLabel="Purge data"
+              message={
+                <>
+                  <p>
+                    <b>Deletes:</b> all ingested emails and their classifications,
+                    planned/executed action records, digest run history, feedback, and
+                    the audit log.
+                  </p>
+                  <p>
+                    <b>Keeps:</b> Gmail connection, categories, rules, digests, and
+                    settings.
+                  </p>
+                  <p>
+                    The sync watermark is reset, so the next poll re-ingests and
+                    re-classifies the initial-lookback window like a first run.
+                  </p>
+                </>
+              }
+              onConfirm={async () => {
+                setConfirmingPurge(false);
+                try {
+                  const r = await post<{ deleted: Record<string, number> }>(
+                    "/admin/purge-data",
+                  );
+                  toast.success(
+                    `Purged: ${Object.entries(r.deleted)
+                      .map(([table, n]) => `${table} ${n}`)
+                      .join(", ")}`,
+                  );
+                  await refresh();
+                } catch (e) {
+                  toast.error(errMsg(e));
+                }
+              }}
+              onCancel={() => setConfirmingPurge(false)}
+            />
+          )}
+          {confirmingReset && (
+            <ConfirmDialog
+              title="Factory reset?"
+              danger
+              confirmLabel="Reset everything"
+              message={
+                <p>
+                  <b>Everything</b> is deleted: the Gmail connection is revoked and
+                  removed, and all emails, categories (with criteria history), rules,
+                  digests, feedback and settings are wiped. You'll be taken back to the
+                  first-run wizard. This cannot be undone.
+                </p>
+              }
+              onConfirm={async () => {
+                setConfirmingReset(false);
+                try {
+                  await post("/admin/factory-reset");
+                  toast.success("Factory reset complete");
+                  await refresh();
+                } catch (e) {
+                  toast.error(errMsg(e));
+                }
+              }}
+              onCancel={() => setConfirmingReset(false)}
+            />
+          )}
+        </>
       )}
     </div>
   );

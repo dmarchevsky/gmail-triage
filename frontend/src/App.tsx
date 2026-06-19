@@ -71,7 +71,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 function SidebarStatus() {
   const { status } = useApp();
   if (!status) return null;
-  const items: { dot: string; text: string; title: string }[] = [
+  const items: { dot: string; text: string; title: string; to: string }[] = [
     {
       dot: !status.gmail.connected
         ? "warn"
@@ -82,6 +82,7 @@ function SidebarStatus() {
         ? `Gmail: ${status.gmail.email ?? "connected"}`
         : "Gmail: not connected",
       title: status.gmail.status === "auth_error" ? "Gmail auth error" : "Gmail",
+      to: "/settings?tab=mailbox",
     },
     {
       dot: status.llm.status === "ok"
@@ -91,6 +92,7 @@ function SidebarStatus() {
           : "neutral",
       text: `LLM: ${status.llm.status}`,
       title: "LLM endpoint",
+      to: "/settings?tab=processing",
     },
     {
       dot: status.telegram.status === "ok" || status.telegram.status === "configured"
@@ -100,6 +102,7 @@ function SidebarStatus() {
           : "neutral",
       text: `Telegram: ${status.telegram.status}`,
       title: "Telegram bot",
+      to: "/settings?tab=notifications",
     },
     {
       dot: status.poller.paused
@@ -111,13 +114,14 @@ function SidebarStatus() {
       title: status.poller.last_error
         ? `Last error: ${status.poller.last_error}`
         : "Poller",
+      to: "/settings?tab=mailbox",
     },
   ];
   const rules = status.rules_mode;
   return (
     <div className="sidebar-status">
       {items.map((item) => (
-        <NavLink to="/settings" key={item.text} title={item.title}>
+        <NavLink to={item.to} key={item.text} title={item.title}>
           <span className={`status-dot ${item.dot}`} />
           <span className="label">{item.text}</span>
         </NavLink>
