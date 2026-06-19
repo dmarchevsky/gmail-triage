@@ -277,8 +277,18 @@ export function GmailConnect({
       <h3>
         Gmail{" "}
         {connected ? (
-          <Badge tone={status?.gmail.status === "auth_error" ? "error" : "ok"}>
-            {status?.gmail.status === "auth_error" ? "auth error" : "connected"}
+          <Badge
+            tone={
+              status?.gmail.status === "auth_error" || status?.gmail.status === "error"
+                ? "error"
+                : "ok"
+            }
+          >
+            {status?.gmail.status === "auth_error"
+              ? "auth error"
+              : status?.gmail.status === "error"
+                ? "error"
+                : "connected"}
           </Badge>
         ) : (
           <Badge tone="warn">not connected</Badge>
@@ -288,7 +298,13 @@ export function GmailConnect({
         <>
           <p>
             Connected as <b>{status?.gmail.email}</b>{" "}
-            <Badge tone={status?.gmail.status === "auth_error" ? "error" : "ok"}>
+            <Badge
+              tone={
+                status?.gmail.status === "auth_error" || status?.gmail.status === "error"
+                  ? "error"
+                  : "ok"
+              }
+            >
               {status?.gmail.status}
             </Badge>
           </p>
@@ -537,22 +553,38 @@ export default function SettingsPage() {
     }
   };
 
-  // Per-tab attention dot: surfaces a problem without opening the tab.
-  const tabDot = (id: string): string => {
-    if (!status) return "";
+  // Per-tab traffic-light dot: green = healthy, amber = needs attention/setup,
+  // red = error, grey = no live status. Every tab always shows one. Within a tab,
+  // errors are checked before warnings so a red state is never masked by an amber one.
+  type DotTone = "ok" | "warn" | "error" | "neutral";
+  const tabStatus = (id: string): { tone: DotTone; label: string } | null => {
+    if (!status) return { tone: "neutral", label: "Loading…" };
     switch (id) {
       case "mailbox":
-        if (!status.gmail.connected) return "warn";
-        if (status.gmail.status === "auth_error") return "error";
-        return status.poller.paused ? "warn" : "";
+        if (status.gmail.status === "auth_error" || status.gmail.status === "error")
+          return { tone: "error", label: "Gmail authentication error" };
+        if (status.ingest.mode === "push" && status.ingest.pubsub_status === "error")
+          return { tone: "error", label: "Push ingestion error" };
+        if (!status.gmail.connected) return { tone: "warn", label: "Gmail not connected" };
+        if (status.poller.paused) return { tone: "warn", label: "Polling paused" };
+        return { tone: "ok", label: "Connected" };
       case "processing":
-        return status.llm.status === "unreachable" ? "error" : "";
+        if (status.llm.status === "unreachable")
+          return { tone: "error", label: "LLM unreachable" };
+        if (status.llm.status === "ok") return { tone: "ok", label: "LLM reachable" };
+        return { tone: "neutral", label: "LLM status unknown" };
       case "notifications":
-        return status.telegram.status === "error" ? "error" : "";
+        if (status.telegram.status === "error")
+          return { tone: "error", label: "Telegram error" };
+        if (status.telegram.status === "unconfigured")
+          return { tone: "warn", label: "Telegram not configured" };
+        return { tone: "ok", label: "Telegram ready" };
       case "security":
-        return settings.auth_disabled ? "warn" : "";
+        return settings.auth_disabled
+          ? { tone: "warn", label: "Password auth disabled" }
+          : { tone: "ok", label: "Password auth enabled" };
       default:
-        return "";
+        return null;
     }
   };
 
@@ -589,14 +621,21 @@ export default function SettingsPage() {
 
       <nav className="settings-tabs">
         {TABS.map((t) => {
-          const dot = tabDot(t.id);
+          const ts = tabStatus(t.id);
           return (
             <button
               key={t.id}
               className={t.id === tab ? "active" : ""}
               onClick={() => setParams({ tab: t.id }, { replace: true })}
             >
-              {dot && <span className={`status-dot ${dot}`} />}
+              {ts && (
+                <span
+                  className={`status-dot ${ts.tone}`}
+                  title={ts.label}
+                  aria-label={ts.label}
+                  role="img"
+                />
+              )}
               {t.label}
             </button>
           );
@@ -618,7 +657,15 @@ export default function SettingsPage() {
           <div className="settings-section">
             <h3>
               LLM Processing{" "}
-              <Badge tone={status?.llm.status === "ok" ? "ok" : "warn"}>
+              <Badge
+                tone={
+                  status?.llm.status === "ok"
+                    ? "ok"
+                    : status?.llm.status === "unreachable"
+                      ? "error"
+                      : "warn"
+                }
+              >
                 {status?.llm.status === "ok" ? "reachable" : (status?.llm.status ?? "unknown")}
               </Badge>
             </h3>
@@ -735,10 +782,8 @@ export default function SettingsPage() {
             {!settings.telegram_bot_token_configured ? (
               <Badge tone="warn">not configured</Badge>
             ) : (
-              <Badge tone={status?.telegram.status === "ok" ? "ok" : "warn"}>
-                {status?.telegram.status === "ok"
-                  ? "configured"
-                  : (status?.telegram.status ?? "configured")}
+              <Badge tone={status?.telegram.status === "error" ? "error" : "ok"}>
+                {status?.telegram.status ?? "configured"}
               </Badge>
             )}
           </h3>
