@@ -280,7 +280,8 @@ def test_empty_digest_skips_silently_but_logs_run(auth_client, digest_setup):
 
 
 @respx.mock
-def test_max_emails_cap_newest_first(auth_client, db_session, digest_setup):
+def test_max_emails_ignored_in_assemble_mode(auth_client, db_session, digest_setup):
+    """In assemble mode max_emails is irrelevant — every eligible email is included."""
     d = digest_setup["digest"]
     auth_client.put(f"/api/v1/digests/{d['id']}", json={
         "name": d["name"], "category_ids": d["category_ids"],
@@ -288,7 +289,25 @@ def test_max_emails_cap_newest_first(auth_client, db_session, digest_setup):
         "min_confidence": 0.8, "max_emails": 1})
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now",
                            json={"preview": True}).json()
-    assert run["email_ids"] == [digest_setup["e2"]]  # newest of the two
+    # Both emails qualify (confidence ≥ 0.8); assemble mode ignores max_emails=1
+    assert len(run["email_ids"]) == 2
+
+
+@respx.mock
+def test_max_emails_cap_applies_in_synthesize_mode(auth_client, db_session, digest_setup):
+    """max_emails cap is enforced in synthesize mode to bound the LLM prompt."""
+    _set_digest_mode(db_session, "synthesize")
+    mock_llm_text("Synth.")
+    respx.post(TG_SEND).mock(return_value=tg_ok())
+    d = digest_setup["digest"]
+    auth_client.put(f"/api/v1/digests/{d['id']}", json={
+        "name": d["name"], "category_ids": d["category_ids"],
+        "cron_times": d["cron_times"], "timezone": d["timezone"],
+        "min_confidence": 0.8, "max_emails": 1})
+    run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    assert run["status"] == "success"
+    # Capped at 1 and ordered newest-first → only e2
+    assert run["email_ids"] == [digest_setup["e2"]]
 
 
 @respx.mock
@@ -412,63 +431,128 @@ async def test_fetch_context_length_none_on_failure():
         assert await llm.fetch_context_length(settings) is None
 
 
-def test_render_message_uses_digest_timezone():
-    from app.services.digests import _render_message
+def test_render_assemble_timezone():
+    """Per-email time in assemble blocks is expressed in the digest's timezone."""
+    from zoneinfo import ZoneInfo
+
+    from app.services.digests import _render_assemble_messages
 
     digest = Digest(name="d", timezone="America/Los_Angeles",
                     include_metadata=True, include_links=False)
     email = Email(gmail_message_id="z1", sender="a@x.com", subject="s",
-                  received_at=datetime(2026, 6, 12, 18, 30, tzinfo=UTC))
-    msg = _render_message(digest, [email], "summary", dry_run_prefix=False)
-    assert "<i>11:30</i>" in msg          # 18:30 UTC == 11:30 PDT
-
-    digest.timezone = "Not/AZone"
-    msg = _render_message(digest, [email], "summary", dry_run_prefix=False)
-    assert "<i>18:30</i>" in msg          # invalid tz falls back to UTC
+                  summary="text", received_at=datetime(2026, 6, 12, 18, 30, tzinfo=UTC))
+    tz = ZoneInfo("America/Los_Angeles")
+    msgs = _render_assemble_messages(digest, [email], dry_run_prefix=False, tz=tz)
+    assert len(msgs) == 1
+    assert "11:30" in msgs[0]    # 18:30 UTC == 11:30 PDT
 
 
-def test_render_message_assemble_bullets():
-    from app.services.digests import _render_message
+def test_render_assemble_invalid_timezone_falls_back_to_utc():
+    """An unrecognised timezone in run_digest falls through to UTC."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+    from app.services.digests import _render_assemble_messages
+
+    digest = Digest(name="d", timezone="Not/AZone",
+                    include_metadata=True, include_links=False)
+    email = Email(gmail_message_id="z2", sender="a@x.com", subject="s",
+                  summary="text", received_at=datetime(2026, 6, 12, 18, 30, tzinfo=UTC))
+    try:
+        tz = ZoneInfo("Not/AZone")
+    except (KeyError, ZoneInfoNotFoundError):
+        from datetime import UTC as _UTC
+        tz = _UTC
+    msgs = _render_assemble_messages(digest, [email], dry_run_prefix=False, tz=tz)
+    assert "18:30" in msgs[0]    # fell back to UTC
+
+
+def test_render_assemble_per_email_blockquotes():
+    """Each email in assemble mode gets its own blockquote with subject link."""
+    from zoneinfo import ZoneInfo
+
+    from app.services.digests import _render_assemble_messages
+
+    tz = ZoneInfo("UTC")
     digest = Digest(name="News", timezone="UTC",
                     include_metadata=True, include_links=True)
-    email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
-                  summary="Stocks fell 2%.",
+    email = Email(gmail_message_id="m9", sender="Alice Smith <alice@x.com>",
+                  subject="Hello", summary="Stocks fell 2%.",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], "ignored", dry_run_prefix=False,
-                          digest_mode="assemble")
+    msgs = _render_assemble_messages(digest, [email], dry_run_prefix=False, tz=tz)
+    assert len(msgs) == 1
+    msg = msgs[0]
     assert "📬 <b>News</b>" in msg
-    assert "<b>1</b> new email(s)" in msg
-    assert "• <b>Hello</b> — Stocks fell 2%." in msg
-    assert "<blockquote>" in msg
+    assert "<b>1</b> email" in msg
+    assert "📧" in msg
     assert '<a href="https://mail.google.com/mail/u/0/#all/m9">Hello</a>' in msg
+    assert "Alice Smith" in msg          # display name, not email address
+    assert "alice@x.com" not in msg     # no raw email address
+    assert "09:05" in msg
+    assert "Stocks fell 2%." in msg
+    assert "<blockquote>" in msg
 
 
-def test_render_message_no_links_plain_subject():
-    from app.services.digests import _render_message
+def test_render_assemble_no_links_plain_subject():
+    """include_links=False renders subject as bold text instead of a hyperlink."""
+    from zoneinfo import ZoneInfo
 
+    from app.services.digests import _render_assemble_messages
+
+    tz = ZoneInfo("UTC")
     digest = Digest(name="News", timezone="UTC",
                     include_metadata=True, include_links=False)
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
-                  received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], "s", dry_run_prefix=False)
+                  summary="text", received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+    msgs = _render_assemble_messages(digest, [email], dry_run_prefix=False, tz=tz)
+    msg = msgs[0]
     assert "<a href" not in msg
-    assert "Hello" in msg
+    assert "<b>Hello</b>" in msg
 
 
-def test_render_message_no_metadata_omits_list():
-    from app.services.digests import _render_message
+def test_render_assemble_no_metadata_omits_sender_time():
+    """include_metadata=False omits the sender · time line."""
+    from zoneinfo import ZoneInfo
 
+    from app.services.digests import _render_assemble_messages
+
+    tz = ZoneInfo("UTC")
     digest = Digest(name="News", timezone="UTC",
                     include_metadata=False, include_links=True)
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
                   summary="body text",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], "ignored", dry_run_prefix=False,
-                          digest_mode="assemble")
-    assert "──────────" not in msg
+    msgs = _render_assemble_messages(digest, [email], dry_run_prefix=False, tz=tz)
+    msg = msgs[0]
+    assert "09:05" not in msg
+    assert "a@x.com" not in msg
+    assert "body text" in msg
     assert "<blockquote>" in msg
-    assert "• <b>Hello</b> — body text" in msg
+
+
+def test_render_assemble_multi_message_split_on_block_boundary():
+    """When emails overflow 4080 chars, they spill into a new message; no block is split."""
+    from zoneinfo import ZoneInfo
+
+    from app.services.digests import _render_assemble_messages
+
+    tz = ZoneInfo("UTC")
+    digest = Digest(name="D", timezone="UTC",
+                    include_metadata=False, include_links=False)
+    # Each email summary is ~1500 chars → two emails will exceed the 4080-char budget
+    big_summary = "x" * 1500
+    emails = [
+        Email(gmail_message_id=f"m{i}", sender="a@x.com", subject=f"S{i}",
+              summary=big_summary, received_at=datetime(2026, 6, 12, tzinfo=UTC))
+        for i in range(3)
+    ]
+    msgs = _render_assemble_messages(digest, emails, dry_run_prefix=False, tz=tz)
+    assert len(msgs) > 1
+    assert all(len(m) <= 4096 for m in msgs)
+    # Each message must have complete blockquotes (not split mid-block)
+    for m in msgs:
+        assert m.count("<blockquote") == m.count("</blockquote>")
+    # Numbered prefix on multi-part messages
+    assert msgs[0].startswith("[1/")
 
 
 def test_render_message_synthesize_tldr_above_blockquote():
@@ -479,8 +563,7 @@ def test_render_message_synthesize_tldr_above_blockquote():
     summary = "TL;DR — two themes today.\nMarkets: stocks fell.\nOps: deploy ok."
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], summary, dry_run_prefix=False,
-                          digest_mode="synthesize")
+    msg = _render_message(digest, [email], summary, dry_run_prefix=False)
     assert "<b>TL;DR — two themes today.</b>" in msg
     after_bq = msg.split("<blockquote", 1)[1]
     assert "TL;DR — two themes today." not in after_bq
@@ -496,8 +579,7 @@ def test_render_message_expandable_when_long():
     summary = "TL;DR.\n" + "\n".join(f"line {i}" for i in range(6))
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], summary, dry_run_prefix=False,
-                          digest_mode="synthesize")
+    msg = _render_message(digest, [email], summary, dry_run_prefix=False)
     assert "<blockquote expandable>" in msg
 
 
@@ -509,10 +591,28 @@ def test_render_message_short_blockquote_not_expandable():
     summary = "TL;DR.\nshort rest."
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
-    msg = _render_message(digest, [email], summary, dry_run_prefix=False,
-                          digest_mode="synthesize")
+    msg = _render_message(digest, [email], summary, dry_run_prefix=False)
     assert "<blockquote>" in msg
     assert "expandable" not in msg
+
+
+def test_strip_summary_html():
+    from app.services.classifier import strip_summary_html
+
+    assert strip_summary_html("Hello &amp; world") == "Hello & world"
+    assert strip_summary_html("<b>bold</b> text&nbsp;here") == "bold text here"
+    assert strip_summary_html("no html") == "no html"
+    assert strip_summary_html("a  b\n\nc") == "a b c"
+
+
+def test_display_name_extraction():
+    from app.services.digests import _display_name
+
+    assert _display_name("Alice Smith <alice@x.com>") == "Alice Smith"
+    assert _display_name('"Bob Jones" <bob@y.com>') == "Bob Jones"
+    assert _display_name("plain@email.com") == "plain@email.com"
+    assert _display_name(None) == "?"
+    assert _display_name("") == "?"
 
 
 def test_normalize_summary_collapses_whitespace():

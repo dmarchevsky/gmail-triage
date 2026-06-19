@@ -11,6 +11,8 @@ classify_pending() remains for the synchronous /classify/run-now endpoint.
 """
 
 import asyncio
+import html as _html
+import re as _re
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select
@@ -36,6 +38,20 @@ _ERROR_RETRY_EVERY = 10  # retry `error` emails every Nth sweep (~10 min)
 # tokens before emitting any summary text — too small a cap yields an empty
 # (truncated) response and the digest then falls back to the raw snippet.
 _SUMMARY_MAX_TOKENS = {"concise": 512, "default": 768, "extended": 1024}
+
+# Character limit passed to the LLM prompt so the model targets the right length.
+# Mirrors the intent of _SUMMARY_MAX_TOKENS at the human-readable level.
+_SUMMARY_MAX_CHARS = {"concise": 150, "default": 350, "extended": 700}
+
+
+def strip_summary_html(text: str) -> str:
+    """Remove HTML tags and unescape entities from a stored summary.
+
+    Applied at write time (summarize_email) and defensively at read time so
+    old summaries with stray markup are also cleaned."""
+    text = _re.sub(r"<[^>]+>", "", text)
+    text = _html.unescape(text)
+    return " ".join(text.split())
 
 
 def _audit_classification_failed(session: Session, email: Email,
@@ -90,20 +106,23 @@ async def summarize_email(email: Email, body: str, settings: dict) -> None:
         return
     depth = settings.get("summarization_depth") or "default"
     max_tokens = _SUMMARY_MAX_TOKENS.get(depth, _SUMMARY_MAX_TOKENS["default"])
+    max_chars = _SUMMARY_MAX_CHARS.get(depth, _SUMMARY_MAX_CHARS["default"])
     max_ctx = int(settings.get("llm_max_context_tokens") or 0)
     if max_ctx > 0:
         max_tokens = min(max_tokens, max(64, max_ctx // 2))
+    system_prompt = settings_service.active_summary_prompt(settings).format(max_chars=max_chars)
     user = (f"From: {email.sender}\nSubject: {email.subject}\n"
             f"Date: {email.received_at}\n{text[:int(settings['classify_body_max_chars'])]}")
     try:
         summary = await llm.chat_text(
-            settings_service.active_summary_prompt(settings), user,
+            system_prompt, user,
             timeout=float(settings["llm_classify_timeout_seconds"]),
             settings=settings,
             max_concurrency=int(settings["llm_max_concurrency"]),
             max_tokens=max_tokens,
         )
-        email.summary = summary.strip() or None
+        cleaned = strip_summary_html(summary.strip()) if summary.strip() else ""
+        email.summary = cleaned or None
         if email.summary is None:
             log.warning("email_summary_empty", email_id=email.id,
                         depth=depth, max_tokens=max_tokens)
