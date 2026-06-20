@@ -33,14 +33,12 @@ _LLM_BACKOFF = 60  # seconds to wait after LLMUnavailable before retrying
 _RECOVERY_INTERVAL = 60  # seconds between recovery sweeps (stall_checker)
 _ERROR_RETRY_EVERY = 10  # retry `error` emails every Nth sweep (~10 min)
 
-# Output-token budget for the per-email summary, by summarization depth. These
-# are generous because a reasoning/"thinking" local model spends a few hundred
-# tokens before emitting any summary text — too small a cap yields an empty
-# (truncated) response and the digest then falls back to the raw snippet.
-_SUMMARY_MAX_TOKENS = {"concise": 512, "default": 768, "extended": 1024}
+# Output-token cap for summarization. Bounds wall-clock time for local models.
+# Thinking/reasoning models use all of this budget for reasoning_content and
+# emit nothing in content; chat_text() extracts the answer from reasoning_content.
+_SUMMARY_MAX_TOKENS = {"concise": 1024, "default": 2048, "extended": 4096}
 
 # Character limit passed to the LLM prompt so the model targets the right length.
-# Mirrors the intent of _SUMMARY_MAX_TOKENS at the human-readable level.
 _SUMMARY_MAX_CHARS = {"concise": 150, "default": 350, "extended": 700}
 
 
@@ -107,9 +105,6 @@ async def summarize_email(email: Email, body: str, settings: dict) -> None:
     depth = settings.get("summarization_depth") or "default"
     max_tokens = _SUMMARY_MAX_TOKENS.get(depth, _SUMMARY_MAX_TOKENS["default"])
     max_chars = _SUMMARY_MAX_CHARS.get(depth, _SUMMARY_MAX_CHARS["default"])
-    max_ctx = int(settings.get("llm_max_context_tokens") or 0)
-    if max_ctx > 0:
-        max_tokens = min(max_tokens, max(64, max_ctx // 2))
     system_prompt = settings_service.active_summary_prompt(settings).format(max_chars=max_chars)
     user = (f"From: {email.sender}\nSubject: {email.subject}\n"
             f"Date: {email.received_at}\n{text[:int(settings['classify_body_max_chars'])]}")

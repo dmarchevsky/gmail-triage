@@ -134,6 +134,53 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
     raise LLMInvalidOutput(last_error)
 
 
+_FINAL_LABEL_KWS = ("final version:", "final answer:", "final summary:", "final output:")
+
+
+def _extract_reasoning_answer(reasoning: str) -> str:
+    """Pull the final answer from a thinking model's reasoning_content when content is empty.
+
+    Two common patterns in thinking model output:
+
+    1. Label then content on the next line(s):
+         *   *Final Version:*
+             Reply to the email with an essay draft...
+    2. Summary paragraph followed by a character-count check:
+         Wall Street finished the week higher...
+
+         *Character count check:* 628 characters. Perfect.
+    """
+    lines = reasoning.splitlines()
+
+    # Pattern 1: find a "Final Version / Answer / Summary" label line and take
+    # the content on the immediately following non-empty lines.
+    for i in range(len(lines) - 1, -1, -1):
+        lc = lines[i].strip().lower()
+        if any(kw in lc for kw in _FINAL_LABEL_KWS):
+            result: list[str] = []
+            for j in range(i + 1, len(lines)):
+                ln = lines[j].strip()
+                if ln and len(ln) > 10:
+                    result.append(ln)
+                elif result:
+                    break
+            if result:
+                text = " ".join(result)
+                if len(text) > 20:
+                    return text
+
+    # Pattern 2: last substantive \n\n-paragraph that is not a bullet or meta line.
+    for para in reversed(reasoning.split("\n\n")):
+        text = para.strip()
+        if not text or "character count" in text.lower():
+            continue
+        if text.startswith("*") or text.startswith("-"):
+            continue
+        if len(text) > 30:
+            return text
+    return ""
+
+
 async def chat_text(system: str, user: str, timeout: float,
                     settings: dict[str, Any] | None = None,
                     max_concurrency: int = 1,
@@ -142,6 +189,11 @@ async def chat_text(system: str, user: str, timeout: float,
 
     `max_tokens` bounds generation so a verbose local model can't run a single
     call for minutes — essential when the per-call timeout is large.
+
+    Thinking/reasoning models emit output in reasoning_content rather than
+    content when their token budget is consumed by the reasoning phase.  When
+    content is empty we fall back to the last substantive paragraph of
+    reasoning_content, which is where these models draft their final answer.
     """
     base_url, model = resolve_llm_target(settings)
     client = _client(base_url, timeout)
@@ -156,7 +208,13 @@ async def chat_text(system: str, user: str, timeout: float,
                           {"role": "user", "content": user}],
                 **kwargs)
         app_state.llm_status = "ok"
-        return (completion.choices[0].message.content or "").strip()
+        content = (completion.choices[0].message.content or "").strip()
+        if not content:
+            rc = (completion.choices[0].message.model_extra or {}).get(
+                "reasoning_content") or ""
+            if rc:
+                content = _extract_reasoning_answer(rc)
+        return content
     except APITimeoutError as e:
         raise LLMTimeout(str(e)) from e
     except APIConnectionError as e:
