@@ -362,6 +362,53 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
 
+# Tracking/redirect URLs used by newsletter platforms are always long (200+ chars)
+# and carry no semantic value. This threshold avoids stripping short, meaningful URLs
+# (e.g. "https://example.com/report" which a human might type).
+_TRACKING_URL_MIN_LEN = 60
+
+# Compiled once at import time.
+_STANDALONE_URL_RE = re.compile(
+    r"^\s*\(?https?://\S{" + str(_TRACKING_URL_MIN_LEN) + r",}\)?\s*$")
+_INLINE_URL_RE = re.compile(r"https?://\S{" + str(_TRACKING_URL_MIN_LEN) + r",}")
+_EMPTY_PARENS_RE = re.compile(r"\s*\(\s*\)")
+_BRACKET_ONLY_RE = re.compile(r"^\s*[\(\)\[\]]+\s*$")
+_BOILERPLATE_RE = re.compile(
+    r"unsubscribe|view\s+in\s+browser|view\s+online|read\s+in\s+browser"
+    r"|privacy\s+policy|terms\s+of\s+(?:use|service)"
+    r"|manage\s+(?:your\s+)?(?:preferences|subscriptions)"
+    r"|update\s+(?:your\s+)?email\s+preferences",
+    re.IGNORECASE,
+)
+
+
+def _clean_body_text(text: str) -> str:
+    """Strip tracking URLs, newsletter boilerplate, and structural noise from
+    extracted email body text so LLMs see content rather than redirect links.
+
+    Handles two URL patterns common in newsletter plain-text bodies:
+    - Standalone lines that are purely a URL (dropped entirely)
+    - Inline URLs embedded mid-sentence, e.g. "Nasdaq (COMP:IND (https://...))":
+      the URL is stripped and empty parens cleaned up, leaving "Nasdaq (COMP:IND)"
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        if _STANDALONE_URL_RE.match(line):
+            continue
+        stripped = line.strip()
+        if not stripped:
+            out.append(line)
+            continue
+        if _BRACKET_ONLY_RE.match(line):
+            continue
+        if len(stripped) < 80 and _BOILERPLATE_RE.search(stripped):
+            continue
+        line = _INLINE_URL_RE.sub("", line)
+        line = _EMPTY_PARENS_RE.sub("", line)
+        out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
 def extract_body_text(payload: dict) -> str:
     """Prefer text/plain; fall back to stripped text/html (spec §4.1)."""
     plain: list[str] = []
@@ -384,10 +431,11 @@ def extract_body_text(payload: dict) -> str:
 
     walk(payload)
     if plain:
-        return "\n".join(plain).strip()
+        return _clean_body_text("\n".join(plain))
     if html:
         soup = BeautifulSoup("\n".join(html), "html.parser")
-        return re.sub(r"\n{3,}", "\n\n", soup.get_text(separator="\n")).strip()
+        raw = re.sub(r"\n{3,}", "\n\n", soup.get_text(separator="\n")).strip()
+        return _clean_body_text(raw)
     return ""
 
 

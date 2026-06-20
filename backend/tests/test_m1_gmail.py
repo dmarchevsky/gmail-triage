@@ -290,6 +290,89 @@ def test_extract_body_nested_multipart():
     assert gmail.extract_body_text(payload) == "nested"
 
 
+def test_clean_body_strips_standalone_url_lines():
+    """Bare URL lines (newsletter tracking links) are dropped entirely."""
+    from app.services.gmail import _clean_body_text
+
+    body = (
+        "Read in Browser  (\n"
+        "https://email-hs.seekingalpha.com/e3t/Ctc/OT+113/" + "x" * 60 + "\n"
+        ")\n"
+        "\n"
+        "Actual content here.\n"
+    )
+    result = _clean_body_text(body)
+    assert "seekingalpha.com" not in result
+    assert "Actual content here." in result
+    # orphaned bracket line also stripped
+    assert "(\n)" not in result
+
+
+def test_clean_body_strips_inline_urls_keeps_surrounding_text():
+    """Inline tracking URLs embedded mid-sentence are removed; surrounding text kept."""
+    from app.services.gmail import _clean_body_text
+
+    url = "https://email-hs.seekingalpha.com/e3t/Ctc/" + "x" * 60
+    body = f"Nasdaq Composite (COMP:IND ({url})) rose 2.4% to 26,518."
+    result = _clean_body_text(body)
+    assert "Nasdaq Composite" in result
+    assert "rose 2.4% to 26,518" in result
+    assert "seekingalpha.com" not in result
+    # empty parens cleaned up
+    assert "()" not in result
+
+
+def test_clean_body_strips_boilerplate_lines():
+    """Short lines matching footer boilerplate are dropped."""
+    from app.services.gmail import _clean_body_text
+
+    body = (
+        "Markets rose this week on easing inflation fears.\n"
+        "\n"
+        "Unsubscribe\n"
+        "Privacy Policy | Terms of Service\n"
+        "Update your email preferences\n"
+        "View in browser\n"
+        "\n"
+        "Dow +0.7% to 51,565.\n"
+    )
+    result = _clean_body_text(body)
+    assert "Markets rose" in result
+    assert "Dow +0.7%" in result
+    assert "Unsubscribe" not in result
+    assert "Privacy Policy" not in result
+    assert "email preferences" not in result
+    assert "View in browser" not in result
+
+
+def test_clean_body_preserves_short_meaningful_urls():
+    """URLs shorter than the tracking threshold are kept."""
+    from app.services.gmail import _clean_body_text
+
+    body = "More at https://sec.gov/filings and in the report."
+    result = _clean_body_text(body)
+    assert "sec.gov" in result
+
+
+def test_extract_body_cleans_newsletter_plain_text():
+    """End-to-end: a newsletter-style plain-text body loses its tracking URLs."""
+    url = "https://email-hs.seekingalpha.com/e3t/Ctc/OT+113/" + "y" * 60
+    body_plain = (
+        f"Read in Browser  (\n{url}\n)\n\n"
+        "Wall Street Breakfast\n\n"
+        "S&P 500 rose 0.9% to 7,501. Nasdaq rose 2.4%.\n\n"
+        "Unsubscribe\n"
+    )
+    payload = {
+        "mimeType": "text/plain",
+        "body": {"data": b64url(body_plain)},
+    }
+    result = gmail.extract_body_text(payload)
+    assert "S&P 500 rose 0.9%" in result
+    assert "seekingalpha.com" not in result
+    assert "Unsubscribe" not in result
+
+
 def test_parse_message_meta_domain():
     meta = gmail.parse_message_meta(gmail_message("x", sender="X <x@Sub.Example.COM>"))
     assert meta["sender_domain"] == "sub.example.com"
