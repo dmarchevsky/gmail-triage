@@ -9,6 +9,7 @@
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -169,15 +170,22 @@ def _extract_reasoning_answer(reasoning: str) -> str:
                 if len(text) > 20:
                     return text
 
-    # Pattern 2: last substantive \n\n-paragraph that is not a bullet or meta line.
-    for para in reversed(reasoning.split("\n\n")):
-        text = para.strip()
-        if not text or "character count" in text.lower():
+    # Pattern 2: scan individual lines from the end; strip bullet markers and
+    # unwrap quoted drafts — handles models that iterate through numbered
+    # drafts like `*   "The SAT was moderately okay..."` on each line.
+    for line in reversed(lines):
+        ln = line.strip()
+        if not ln or "character count" in ln.lower():
             continue
-        if text.startswith("*") or text.startswith("-"):
+        # Strip leading bullet / list markers
+        core = re.sub(r"^[*\-•]+\s*", "", ln).strip()
+        # Skip pure *meta-commentary* lines (italic/bold wrappers with no quotes)
+        if re.match(r"^\*[^*\"]+\*\s*$", core):
             continue
-        if len(text) > 30:
-            return text
+        # Unwrap a quoted draft "answer text" → answer text
+        core = core.strip('"').strip()
+        if len(core) > 30:
+            return core
     return ""
 
 

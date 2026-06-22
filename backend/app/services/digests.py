@@ -7,8 +7,8 @@ dry_run) and does not consume eligibility; failed sends (status error) also
 keep emails eligible.
 """
 
-import re
 from datetime import UTC, datetime, timedelta
+from email.utils import parseaddr
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
@@ -79,14 +79,14 @@ def _summary_line(email: Email) -> str:
 
 
 async def _summarize(session: Session, digest: Digest, emails: list[Email],
-                     settings: dict) -> str:
+                     settings: dict, digest_mode: str = "assemble") -> str:
     """Build the digest body from the per-email summaries saved at classification
     time. `digest_mode == "assemble"` lists them verbatim (no LLM); `"synthesize"`
     makes one LLM call combining them via the editable digest prompt."""
     lines = [_summary_line(e) for e in emails]
     any_content = any((e.summary or e.snippet) for e in emails)
 
-    if (settings.get("digest_mode") or "assemble") != "synthesize":
+    if digest_mode != "synthesize":
         # Pure assembly — never ship a bodyless digest (let the caller fail the run
         # rather than send sender/subject lines with no content behind them).
         return "\n".join(lines)[:DIGEST_MAX_CHARS] if any_content else ""
@@ -150,12 +150,8 @@ def _display_name(sender: str | None) -> str:
     """Extract display name from 'Name <email@host>' format; fall back to raw value."""
     if not sender:
         return "?"
-    s = sender.strip()
-    m = re.match(r'^"?(.+?)"?\s*<[^>@]+@[^>]+>\s*$', s)
-    if m:
-        name = m.group(1).strip('" ').strip()
-        return name if name else s
-    return s
+    name, addr = parseaddr(sender.strip())
+    return name.strip('" ') or addr or sender.strip()
 
 
 def _email_block(email: Email, digest: Digest, tz: ZoneInfo) -> str:
@@ -178,10 +174,7 @@ def _email_block(email: Email, digest: Digest, tz: ZoneInfo) -> str:
     if text:
         inner_lines.append(esc(text))
 
-    inner = "\n".join(inner_lines)
-    expandable = len(inner) > _EXPANDABLE_MIN_CHARS
-    tag = "<blockquote expandable>" if expandable else "<blockquote>"
-    return f"{tag}{inner}</blockquote>"
+    return _blockquote("\n".join(inner_lines))
 
 
 def _render_assemble_messages(digest: Digest, emails: list[Email],
@@ -217,8 +210,7 @@ def _render_assemble_messages(digest: Digest, emails: list[Email],
     messages.append(current)
 
     if len(messages) > 1:
-        total = len(messages)
-        messages = [f"[{i + 1}/{total}] {m}" for i, m in enumerate(messages)]
+        messages = [f"[{i + 1}/{len(messages)}] {m}" for i, m in enumerate(messages)]
     return messages
 
 
@@ -310,7 +302,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
             session.commit()
             return run
 
-        summary = await _summarize(session, digest, emails, settings)
+        summary = await _summarize(session, digest, emails, settings, digest_mode=digest_mode)
         run.summary_text = summary
         if not summary.strip():
             # Empty after retry + micro-summary fallback: surface as a failed run

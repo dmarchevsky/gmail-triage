@@ -8,9 +8,20 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_session
-from app.models import AuditLog, Category, Email, EmailAction, Feedback, Rule
+from app.models import AuditLog, Category, Email, EmailAction, EmailStatus, Feedback, Rule
 
 router = APIRouter()
+
+
+def _reset_email_to_pending(email: Email) -> None:
+    email.classification_id = None
+    email.confidence = None
+    email.rationale = None
+    email.summary = None
+    email.error = None
+    email.classified_at = None
+    email.processing_started_at = None
+    email.status = EmailStatus.pending.value
 
 
 def serialize_action(a: EmailAction) -> dict:
@@ -165,21 +176,12 @@ async def reclassify_email(email_id: int,
     up and classifies it; clients poll for status updates."""
     from sqlalchemy import delete
 
-    from app.models import EmailStatus
-
     email = session.get(Email, email_id)
     if email is None:
         raise HTTPException(status_code=404, detail="Email not found")
 
     session.execute(delete(EmailAction).where(EmailAction.email_id == email_id))
-    email.classification_id = None
-    email.confidence = None
-    email.rationale = None
-    email.summary = None
-    email.error = None
-    email.classified_at = None
-    email.processing_started_at = None
-    email.status = EmailStatus.pending.value
+    _reset_email_to_pending(email)
     session.commit()
 
     session.expire(email)
@@ -200,8 +202,6 @@ async def reclassify_bulk(body: BulkEmailIds,
     picks them up and classifies them; clients poll for status updates."""
     from sqlalchemy import delete
 
-    from app.models import EmailStatus
-
     if not body.email_ids:
         return {"queued": 0}
 
@@ -209,14 +209,7 @@ async def reclassify_bulk(body: BulkEmailIds,
         EmailAction.email_id.in_(body.email_ids)))
     emails = list(session.scalars(select(Email).where(Email.id.in_(body.email_ids))))
     for email in emails:
-        email.classification_id = None
-        email.confidence = None
-        email.rationale = None
-        email.summary = None
-        email.error = None
-        email.classified_at = None
-        email.processing_started_at = None
-        email.status = EmailStatus.pending.value
+        _reset_email_to_pending(email)
     session.commit()
 
     return {"queued": len(emails)}

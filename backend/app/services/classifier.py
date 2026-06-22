@@ -116,7 +116,8 @@ async def summarize_email(email: Email, body: str, settings: dict) -> None:
             max_concurrency=int(settings["llm_max_concurrency"]),
             max_tokens=max_tokens,
         )
-        cleaned = strip_summary_html(summary.strip()) if summary.strip() else ""
+        stripped = summary.strip()
+        cleaned = strip_summary_html(stripped) if stripped else ""
         email.summary = cleaned or None
         if email.summary is None:
             log.warning("email_summary_empty", email_id=email.id,

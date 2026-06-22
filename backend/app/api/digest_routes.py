@@ -85,8 +85,11 @@ def serialize_run(r: DigestRun) -> dict:
 
 
 def _check_categories(session: Session, ids: list[int]) -> None:
+    if not ids:
+        return
+    found = set(session.scalars(select(Category.id).where(Category.id.in_(ids))))
     for cid in ids:
-        if session.get(Category, cid) is None:
+        if cid not in found:
             raise HTTPException(status_code=400, detail=f"Unknown category id {cid}")
 
 

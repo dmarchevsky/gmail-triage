@@ -184,14 +184,22 @@ function DigestEditor({
   );
 }
 
+const runTone = (s: string) =>
+  s === "running"
+    ? "info"
+    : s === "success"
+      ? "ok"
+      : s === "error"
+        ? "error"
+        : s === "dry_run"
+          ? "dry"
+          : "neutral";
+
 function RunHistory({ digest, onClose }: { digest: Digest; onClose: () => void }) {
   const [runs, setRuns] = useState<DigestRun[]>([]);
   useEffect(() => {
     get<DigestRun[]>(`/digests/${digest.id}/runs`).then(setRuns);
   }, [digest.id]);
-
-  const tone = (s: string) =>
-    s === "success" ? "ok" : s === "error" ? "error" : s === "dry_run" ? "dry" : "neutral";
 
   return (
     <Modal title={`Runs — ${digest.name}`} onClose={onClose} wide>
@@ -199,7 +207,7 @@ function RunHistory({ digest, onClose }: { digest: Digest; onClose: () => void }
       {runs.map((r) => (
         <div key={r.id} className="settings-section">
           <p>
-            {fmtDate(r.started_at)} <Badge tone={tone(r.status)}>{r.status}</Badge>{" "}
+            {fmtDate(r.started_at)} <Badge tone={runTone(r.status)}>{r.status}</Badge>{" "}
             <span className="sub">{r.email_ids.length} email(s)</span>
           </p>
           {r.error && <p className="error">{r.error}</p>}
