@@ -116,15 +116,25 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
                         or settings_service.DEFAULTS["prompt_digest_synthesis"]
                         ).format(max_chars=synthesis_chars)
     synthesis_user = (
-        f"Digest: {digest.name}\nEmails ({len(emails)}), each as a one-line "
-        f"summary:\n\n" + "\n".join(lines) + "\n\nProduce the digest now."
+        f"Digest: {digest.name}\nEmails ({len(emails)}):\n\n"
+        + "\n".join(lines) + "\n\nProduce the digest now."
+    )
+
+    enable_thinking = bool(settings.get("llm_synthesis_enable_thinking") or False)
+    temperature = float(settings.get("llm_synthesis_temperature") or 0)
+    max_tok_override = int(settings.get("llm_synthesis_max_tokens") or 0)
+    synthesis_max_tokens = _clamp_tokens(
+        max_tok_override if max_tok_override > 0 else synthesis_chars // 4 + 64,
+        settings,
     )
 
     async def synthesize() -> str:
         return (await llm.chat_text(
             synthesis_system, synthesis_user, timeout=timeout,
             max_concurrency=concurrency, settings=settings,
-            max_tokens=_clamp_tokens(synthesis_chars // 4 + 64, settings),
+            max_tokens=synthesis_max_tokens,
+            temperature=temperature,
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
         )).strip()
 
     body = await synthesize()

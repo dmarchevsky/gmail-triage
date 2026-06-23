@@ -186,6 +186,9 @@ export interface Settings {
   llm_digest_timeout_seconds: number;
   llm_max_concurrency: number;
   llm_max_context_tokens: number;
+  llm_synthesis_enable_thinking: boolean;
+  llm_synthesis_temperature: number;
+  llm_synthesis_max_tokens: number;
   summarization_depth: string;
   prompt_classification_system: string;
   prompt_summary_concise: string;

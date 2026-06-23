@@ -697,6 +697,43 @@ export default function SettingsPage() {
                 </label>
               ))}
               <label>
+                Synthesis temperature (0 = deterministic)
+                <input
+                  type="number"
+                  step="0.05"
+                  min="0"
+                  max="2"
+                  placeholder="0"
+                  value={num("llm_synthesis_temperature")}
+                  onChange={(e) =>
+                    setDraft({ ...draft, llm_synthesis_temperature: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Synthesis token budget (0 = auto ~939)
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={num("llm_synthesis_max_tokens")}
+                  onChange={(e) =>
+                    setDraft({ ...draft, llm_synthesis_max_tokens: e.target.value })
+                  }
+                />
+              </label>
+              <label className="checkbox span2">
+                <input
+                  type="checkbox"
+                  checked={settings.llm_synthesis_enable_thinking}
+                  onChange={(e) =>
+                    saveValues({ llm_synthesis_enable_thinking: e.target.checked })
+                  }
+                />
+                Enable thinking (for reasoning models; off suppresses chain-of-thought
+                via chat_template_kwargs)
+              </label>
+              <label>
                 Summarization depth (applied to newly-classified emails)
                 <select
                   value={settings.summarization_depth}
@@ -717,6 +754,10 @@ export default function SettingsPage() {
                   if (draft.llm_model !== undefined) values.llm_model = draft.llm_model;
                   for (const [key] of llmFields)
                     if (draft[key] !== undefined) values[key] = Number(draft[key]);
+                  if (draft.llm_synthesis_temperature !== undefined)
+                    values.llm_synthesis_temperature = Number(draft.llm_synthesis_temperature);
+                  if (draft.llm_synthesis_max_tokens !== undefined)
+                    values.llm_synthesis_max_tokens = Number(draft.llm_synthesis_max_tokens);
                   saveValues(values);
                 }}
               >

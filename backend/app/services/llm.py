@@ -192,7 +192,9 @@ def _extract_reasoning_answer(reasoning: str) -> str:
 async def chat_text(system: str, user: str, timeout: float,
                     settings: dict[str, Any] | None = None,
                     max_concurrency: int = 1,
-                    max_tokens: int | None = None) -> str:
+                    max_tokens: int | None = None,
+                    temperature: float = 0,
+                    extra_body: dict | None = None) -> str:
     """Plain-text chat completion (digest summaries).
 
     `max_tokens` bounds generation so a verbose local model can't run a single
@@ -208,10 +210,12 @@ async def chat_text(system: str, user: str, timeout: float,
     kwargs: dict[str, Any] = {}
     if max_tokens is not None and max_tokens > 0:
         kwargs["max_tokens"] = max_tokens
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     try:
         async with _get_semaphore(max_concurrency):
             completion = await client.chat.completions.create(
-                model=model, temperature=0,
+                model=model, temperature=temperature,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
                 **kwargs)

@@ -59,6 +59,14 @@ DEFAULTS: dict[str, Any] = {
     "prompt_summary_default": _prompt_file("summary_default.txt"),
     "prompt_summary_extended": _prompt_file("summary_extended.txt"),
     "prompt_digest_synthesis": _prompt_file("digest_synthesis_system.txt"),
+    # Digest synthesis LLM knobs (applied per synthesis call, not classification).
+    # enable_thinking=False suppresses chain-of-thought on thinking models (e.g. Gemma 4).
+    # temperature=0 is deterministic; raise it slightly if the model stops after one line.
+    # max_tokens=0 means use the built-in formula (synthesis_chars // 4 + 64); set higher
+    # for thinking models that need budget for the reasoning phase before writing output.
+    "llm_synthesis_enable_thinking": False,
+    "llm_synthesis_temperature": 0.0,
+    "llm_synthesis_max_tokens": 0,
     # Max classification attempts before an email is left terminally in `error`
     # (the recovery loop retries `error`/stalled emails up to this many times).
     "classify_max_attempts": 5,
