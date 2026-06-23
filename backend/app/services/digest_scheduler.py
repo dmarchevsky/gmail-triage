@@ -45,6 +45,35 @@ async def _run_digest_job(digest_id: int) -> None:
         session.close()
 
 
+async def _check_thresholds_job() -> None:
+    from app.db import get_sessionmaker
+    from app.models import Digest
+    from app.services.digests import count_eligible_emails, run_digest
+
+    session = get_sessionmaker()()
+    try:
+        digests = session.scalars(
+            select(Digest).where(
+                Digest.enabled.is_(True),
+                Digest.email_threshold.is_not(None),
+            )
+        ).all()
+        for digest in digests:
+            try:
+                count = count_eligible_emails(session, digest)
+                if count >= digest.email_threshold:
+                    log.info("threshold_triggered", digest_id=digest.id,
+                             count=count, threshold=digest.email_threshold)
+                    await run_digest(session, digest, actor="threshold")
+            except Exception as e:  # noqa: BLE001
+                log.error("threshold_check_digest_failed",
+                          digest_id=digest.id, error=str(e))
+    except Exception as e:  # noqa: BLE001
+        log.error("threshold_job_failed", error=str(e))
+    finally:
+        session.close()
+
+
 def reschedule_all() -> None:
     """Sync scheduler jobs with the digests table. Safe to call on any CRUD."""
     if _scheduler is None:
@@ -76,6 +105,13 @@ def start() -> None:
     if not _scheduler.running:
         _scheduler.start()
     reschedule_all()
+    from apscheduler.triggers.interval import IntervalTrigger
+    _scheduler.add_job(
+        _check_thresholds_job,
+        IntervalTrigger(minutes=30),
+        id="threshold-check",
+        replace_existing=True,
+    )
 
 
 def shutdown() -> None:

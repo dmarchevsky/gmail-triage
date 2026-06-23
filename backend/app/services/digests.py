@@ -61,6 +61,24 @@ def eligible_emails(session: Session, digest: Digest) -> list[Email]:
     return out
 
 
+def count_eligible_emails(session: Session, digest: Digest) -> int:
+    """COUNT query for threshold checking — no max_emails cap, no row fetch."""
+    last_success: datetime | None = session.scalar(
+        select(func.max(DigestRun.started_at)).where(
+            DigestRun.digest_id == digest.id,
+            DigestRun.status == DigestRunStatus.success.value))
+
+    query = (select(func.count()).select_from(Email)
+             .where(Email.classification_id.in_(digest.category_ids or []),
+                    Email.confidence >= digest.min_confidence,
+                    Email.status.in_([EmailStatus.classified.value,
+                                      EmailStatus.actioned.value])))
+    if last_success is not None:
+        query = query.where(Email.received_at > last_success)
+
+    return session.scalar(query) or 0
+
+
 def _clamp_tokens(tokens: int, settings: dict) -> int:
     """Cap an output-token budget so input + output can't overflow the model's
     context window; reserve at least half the window for the prompt."""

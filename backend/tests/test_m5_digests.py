@@ -643,3 +643,60 @@ def test_normalize_summary_collapses_whitespace():
 
     raw = "line one   \n\n\n\nline two\n\n"
     assert _normalize_summary(raw) == "line one\n\nline two"
+
+
+# ── threshold ────────────────────────────────────────────────────────────────
+
+def test_count_eligible_emails(auth_client, db_session, digest_setup):
+    """count_eligible_emails returns the number of qualifying emails since last success."""
+    from app.models import Digest as DigestModel
+    from app.services.digests import count_eligible_emails
+
+    digest_obj = db_session.get(DigestModel, digest_setup["digest"]["id"])
+    # 2 qualifying emails (e1, e2; low-conf excluded)
+    assert count_eligible_emails(db_session, digest_obj) == 2
+
+
+def test_count_eligible_respects_watermark(auth_client, db_session, digest_setup):
+    """After a successful run the count resets to 0 (watermark advances)."""
+    from app.models import Digest as DigestModel
+    from app.services.digests import count_eligible_emails
+
+    digest_obj = db_session.get(DigestModel, digest_setup["digest"]["id"])
+    db_session.add(DigestRun(
+        digest_id=digest_obj.id, status=DigestRunStatus.success.value,
+        started_at=datetime.now(UTC), email_ids=[]))
+    db_session.commit()
+    assert count_eligible_emails(db_session, digest_obj) == 0
+
+
+@respx.mock
+@pytest.mark.anyio
+async def test_threshold_triggers_send(auth_client, db_session, digest_setup):
+    """When eligible email count >= threshold the check job fires run_digest."""
+    from app.models import Digest as DigestModel
+    from app.services.digest_scheduler import _check_thresholds_job
+
+    tg = respx.post(TG_SEND).mock(return_value=tg_ok())
+    digest_obj = db_session.get(DigestModel, digest_setup["digest"]["id"])
+    digest_obj.email_threshold = 2  # exactly at threshold (2 eligible emails)
+    db_session.commit()
+
+    await _check_thresholds_job()
+    assert tg.call_count >= 1
+
+
+@respx.mock
+@pytest.mark.anyio
+async def test_threshold_no_fire_below_threshold(auth_client, db_session, digest_setup):
+    """When eligible email count < threshold the check job does not send."""
+    from app.models import Digest as DigestModel
+    from app.services.digest_scheduler import _check_thresholds_job
+
+    tg = respx.post(TG_SEND)
+    digest_obj = db_session.get(DigestModel, digest_setup["digest"]["id"])
+    digest_obj.email_threshold = 3  # threshold is 3, only 2 eligible
+    db_session.commit()
+
+    await _check_thresholds_job()
+    assert tg.call_count == 0
