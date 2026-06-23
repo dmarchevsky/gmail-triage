@@ -33,8 +33,7 @@ GMAIL_DEEP_LINK = "https://mail.google.com/mail/u/0/#all/{msg_id}"
 DIGEST_MAX_CHARS = 3500  # synthesis budget; final message may add metadata/links
 
 
-def eligible_emails(session: Session, digest: Digest, *,
-                    digest_mode: str = "assemble") -> list[Email]:
+def eligible_emails(session: Session, digest: Digest) -> list[Email]:
     # Last successful run time bounds the window; the received_at > last_success
     # filter below excludes everything prior runs already covered, so there's no
     # need to load every historical run's email_ids into memory.
@@ -57,7 +56,7 @@ def eligible_emails(session: Session, digest: Digest, *,
         out.append(email)
         # max_emails cap only matters for synthesize mode (where prompt budget is
         # finite). Assemble mode lists every eligible email.
-        if digest_mode == "synthesize" and len(out) >= digest.max_emails:
+        if digest.mode == "synthesize" and len(out) >= digest.max_emails:
             break
     return out
 
@@ -79,14 +78,14 @@ def _summary_line(email: Email) -> str:
 
 
 async def _summarize(session: Session, digest: Digest, emails: list[Email],
-                     settings: dict, digest_mode: str = "assemble") -> str:
+                     settings: dict) -> str:
     """Build the digest body from the per-email summaries saved at classification
-    time. `digest_mode == "assemble"` lists them verbatim (no LLM); `"synthesize"`
+    time. `digest.mode == "assemble"` lists them verbatim (no LLM); `"synthesize"`
     makes one LLM call combining them via the editable digest prompt."""
     lines = [_summary_line(e) for e in emails]
     any_content = any((e.summary or e.snippet) for e in emails)
 
-    if digest_mode != "synthesize":
+    if digest.mode != "synthesize":
         # Pure assembly — never ship a bodyless digest (let the caller fail the run
         # rather than send sender/subject lines with no content behind them).
         return "\n".join(lines)[:DIGEST_MAX_CHARS] if any_content else ""
@@ -251,7 +250,6 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
     """preview=True renders the summary (status dry_run) without sending and
     without consuming eligibility."""
     settings = settings_service.get_all_settings(session, redact=False)
-    digest_mode = settings.get("digest_mode") or "assemble"
 
     # Guard against concurrent runs of the same digest (e.g. a double-clicked
     # "run now"/"preview" or a scheduled run overlapping a manual one). The
@@ -281,7 +279,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
     session.commit()
 
     try:
-        emails = eligible_emails(session, digest, digest_mode=digest_mode)
+        emails = eligible_emails(session, digest)
         run.email_ids = [e.id for e in emails]
         # Commit before the (potentially minutes-long) summarization so no
         # dirty state can autoflush into a held SQLite write transaction.
@@ -302,7 +300,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
             session.commit()
             return run
 
-        summary = await _summarize(session, digest, emails, settings, digest_mode=digest_mode)
+        summary = await _summarize(session, digest, emails, settings)
         run.summary_text = summary
         if not summary.strip():
             # Empty after retry + micro-summary fallback: surface as a failed run
@@ -319,7 +317,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
                 raise telegram.TelegramError(
                     "Telegram bot token / chat id not configured")
 
-            if digest_mode == "assemble":
+            if digest.mode == "assemble":
                 try:
                     tz = ZoneInfo(digest.timezone or "UTC")
                 except (KeyError, ZoneInfoNotFoundError):

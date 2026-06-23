@@ -263,6 +263,8 @@ class Digest(Base):
     include_metadata: Mapped[bool] = mapped_column(Boolean, default=True)
     max_emails: Mapped[int] = mapped_column(Integer, default=50)
     send_no_news: Mapped[bool] = mapped_column(Boolean, default=False)
+    mode: Mapped[str] = mapped_column(String(16), default="assemble")
+    email_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)

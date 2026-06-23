@@ -53,10 +53,6 @@ DEFAULTS: dict[str, Any] = {
     # System-wide summarization depth applied when an email is summarized at
     # classification time: concise · default · extended.
     "summarization_depth": "default",
-    # How a digest is built from the saved per-email summaries:
-    #   "assemble"   — list the summaries verbatim, no LLM call.
-    #   "synthesize" — one LLM call combines them via prompt_digest_synthesis.
-    "digest_mode": "assemble",
     # Editable LLM prompts (defaults seeded from the on-disk prompt files).
     "prompt_classification_system": _prompt_file("classification_system.txt"),
     "prompt_summary_concise": _prompt_file("summary_concise.txt"),

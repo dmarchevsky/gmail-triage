@@ -145,9 +145,13 @@ def mock_llm_text(text="Synth body."):
     return respx.post(CHAT_URL).mock(return_value=llm_response(text))
 
 
-def _set_digest_mode(db_session, mode):
-    from app.services import settings_service
-    settings_service.set_setting(db_session, "digest_mode", mode)
+def _set_digest_mode(db_session, digest_id, mode):
+    """Set mode on a specific digest; replaces the removed global setting."""
+    from sqlalchemy import update  # noqa: PLC0415
+
+    from app.models import Digest as DigestModel  # noqa: PLC0415
+    db_session.execute(
+        update(DigestModel).where(DigestModel.id == digest_id).values(mode=mode))
     db_session.commit()
 
 
@@ -204,10 +208,10 @@ def test_assemble_falls_back_to_snippet_when_no_summary(auth_client, db_session,
 @respx.mock
 def test_synthesize_mode_one_llm_call(auth_client, db_session, digest_setup):
     """Synthesize mode makes exactly one LLM call over the saved summaries."""
-    _set_digest_mode(db_session, "synthesize")
+    d = digest_setup["digest"]
+    _set_digest_mode(db_session, d["id"], "synthesize")
     chat = mock_llm_text("Synthesized digest.")
     tg = respx.post(TG_SEND).mock(return_value=tg_ok())
-    d = digest_setup["digest"]
 
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
     assert run["status"] == "success"
@@ -215,7 +219,6 @@ def test_synthesize_mode_one_llm_call(auth_client, db_session, digest_setup):
     assert chat.call_count == 1
     sent = json.loads(tg.calls[0].request.content)
     assert "Synthesized digest." in sent["text"]
-    # The saved summaries (not bodies) are what the synthesis call sees.
     assert "S&P summary" in chat.calls[0].request.content.decode()
 
 
@@ -296,17 +299,15 @@ def test_max_emails_ignored_in_assemble_mode(auth_client, db_session, digest_set
 @respx.mock
 def test_max_emails_cap_applies_in_synthesize_mode(auth_client, db_session, digest_setup):
     """max_emails cap is enforced in synthesize mode to bound the LLM prompt."""
-    _set_digest_mode(db_session, "synthesize")
     mock_llm_text("Synth.")
     respx.post(TG_SEND).mock(return_value=tg_ok())
     d = digest_setup["digest"]
     auth_client.put(f"/api/v1/digests/{d['id']}", json={
         "name": d["name"], "category_ids": d["category_ids"],
         "cron_times": d["cron_times"], "timezone": d["timezone"],
-        "min_confidence": 0.8, "max_emails": 1})
+        "min_confidence": 0.8, "max_emails": 1, "mode": "synthesize"})
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
     assert run["status"] == "success"
-    # Capped at 1 and ordered newest-first → only e2
     assert run["email_ids"] == [digest_setup["e2"]]
 
 
@@ -334,8 +335,30 @@ def test_list_digests_includes_last_run(auth_client, db_session, digest_setup):
     db_session.commit()
     listed = auth_client.get("/api/v1/digests").json()
     row = next(x for x in listed if x["id"] == d["id"])
-    assert "depth" not in row                   # per-digest depth removed
+    assert "depth" not in row
+    assert row["mode"] == "assemble"
+    assert row["email_threshold"] is None
     assert row["last_run"]["status"] == "success"
+
+
+def test_digest_mode_and_threshold_fields(auth_client, db_session, digest_setup):
+    """mode and email_threshold are persisted and returned by the API."""
+    d = digest_setup["digest"]
+    # Default: assemble, no threshold
+    listed = auth_client.get("/api/v1/digests").json()
+    row = next(x for x in listed if x["id"] == d["id"])
+    assert row["mode"] == "assemble"
+    assert row["email_threshold"] is None
+
+    # Update to synthesize with threshold
+    auth_client.put(f"/api/v1/digests/{d['id']}", json={
+        "name": d["name"], "category_ids": d["category_ids"],
+        "cron_times": d["cron_times"], "timezone": d["timezone"],
+        "min_confidence": 0.8, "mode": "synthesize", "email_threshold": 10})
+    updated = auth_client.get("/api/v1/digests").json()
+    row = next(x for x in updated if x["id"] == d["id"])
+    assert row["mode"] == "synthesize"
+    assert row["email_threshold"] == 10
 
 
 def test_llm_queue_reports_running_work(auth_client, db_session, digest_setup):
@@ -355,10 +378,10 @@ def test_llm_queue_reports_running_work(auth_client, db_session, digest_setup):
 def test_synthesize_empty_falls_back_to_summaries(auth_client, db_session, digest_setup):
     """Synthesis blank on both attempts → body falls back to the saved summaries;
     run still succeeds and the message is non-blank."""
-    _set_digest_mode(db_session, "synthesize")
+    d = digest_setup["digest"]
+    _set_digest_mode(db_session, d["id"], "synthesize")
     chat = mock_llm_text("   ")                     # blank on every attempt
     tg = respx.post(TG_SEND).mock(return_value=tg_ok())
-    d = digest_setup["digest"]
 
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
     assert run["status"] == "success"
@@ -372,7 +395,8 @@ def test_synthesize_empty_falls_back_to_summaries(auth_client, db_session, diges
 @respx.mock
 def test_synthesize_empty_retry_recovers(auth_client, db_session, digest_setup):
     """First synthesis attempt blank, second returns text → the retry text wins."""
-    _set_digest_mode(db_session, "synthesize")
+    d = digest_setup["digest"]
+    _set_digest_mode(db_session, d["id"], "synthesize")
     state = {"n": 0}
 
     def handler(request):
@@ -381,7 +405,6 @@ def test_synthesize_empty_retry_recovers(auth_client, db_session, digest_setup):
 
     respx.post(CHAT_URL).mock(side_effect=handler)
     respx.post(TG_SEND).mock(return_value=tg_ok())
-    d = digest_setup["digest"]
 
     run = auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
     assert run["status"] == "success"
