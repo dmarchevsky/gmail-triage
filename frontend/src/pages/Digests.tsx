@@ -24,6 +24,8 @@ interface DigestForm {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
+  mode: "assemble" | "synthesize";
+  email_threshold: number | "";
 }
 
 function DigestEditor({
@@ -51,6 +53,8 @@ function DigestEditor({
     include_metadata: digest?.include_metadata ?? true,
     max_emails: digest?.max_emails ?? 50,
     send_no_news: digest?.send_no_news ?? false,
+    mode: digest?.mode ?? "assemble",
+    email_threshold: digest?.email_threshold ?? "",
   });
   const toggleCategory = (id: number) =>
     setForm({
@@ -64,6 +68,7 @@ function DigestEditor({
     const body = {
       ...form,
       telegram_chat_id: form.telegram_chat_id || null,
+      email_threshold: form.email_threshold === "" ? null : form.email_threshold,
       cron_times: form.cron_times
         .split(",")
         .map((s) => s.trim())
@@ -139,6 +144,33 @@ function DigestEditor({
             max="500"
             value={form.max_emails}
             onChange={(e) => setForm({ ...form, max_emails: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Mode
+          <select
+            value={form.mode}
+            onChange={(e) =>
+              setForm({ ...form, mode: e.target.value as "assemble" | "synthesize" })
+            }
+          >
+            <option value="assemble">Assemble — list saved summaries (no LLM)</option>
+            <option value="synthesize">Synthesize — one LLM call combines them</option>
+          </select>
+        </label>
+        <label>
+          Email threshold (empty = send on schedule only)
+          <input
+            type="number"
+            min="1"
+            placeholder="No threshold"
+            value={form.email_threshold}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                email_threshold: e.target.value === "" ? "" : Number(e.target.value),
+              })
+            }
           />
         </label>
         <label className="checkbox">

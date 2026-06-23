@@ -707,16 +707,6 @@ export default function SettingsPage() {
                   <option value="extended">Extended — short paragraph</option>
                 </select>
               </label>
-              <label>
-                Digest mode
-                <select
-                  value={settings.digest_mode}
-                  onChange={(e) => saveValues({ digest_mode: e.target.value })}
-                >
-                  <option value="assemble">Assemble — list saved summaries (no LLM)</option>
-                  <option value="synthesize">Synthesize — one LLM call combines them</option>
-                </select>
-              </label>
             </div>
             <div className="head-actions">
               <button

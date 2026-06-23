@@ -187,7 +187,6 @@ export interface Settings {
   llm_max_concurrency: number;
   llm_max_context_tokens: number;
   summarization_depth: string;
-  digest_mode: string;
   prompt_classification_system: string;
   prompt_summary_concise: string;
   prompt_summary_default: string;
@@ -233,6 +232,8 @@ export interface Digest {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
+  mode: "assemble" | "synthesize";
+  email_threshold: number | null;
   last_run: DigestLastRun | null;
 }
 
