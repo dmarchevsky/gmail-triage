@@ -56,7 +56,7 @@ def test_settings_import_roundtrip(auth_client):
 
 def test_prompt_settings_default_to_disk_and_roundtrip(auth_client):
     """Editable prompts default to the on-disk prompt files and persist on save;
-    summarization depth / digest mode round-trip."""
+    summarization depth round-trip."""
     from app.services.settings_service import _prompt_file
 
     settings = auth_client.get("/api/v1/settings").json()
@@ -64,16 +64,13 @@ def test_prompt_settings_default_to_disk_and_roundtrip(auth_client):
         _prompt_file("classification_system.txt")
     assert settings["prompt_digest_synthesis"] == _prompt_file("digest_synthesis_system.txt")
     assert settings["summarization_depth"] == "default"
-    assert settings["digest_mode"] == "assemble"
 
     auth_client.put("/api/v1/settings", json={
         "prompt_summary_concise": "Custom concise prompt.",
-        "summarization_depth": "extended",
-        "digest_mode": "synthesize"})
+        "summarization_depth": "extended"})
     updated = auth_client.get("/api/v1/settings").json()
     assert updated["prompt_summary_concise"] == "Custom concise prompt."
     assert updated["summarization_depth"] == "extended"
-    assert updated["digest_mode"] == "synthesize"
 
 
 def test_removed_settings_rejected(auth_client):

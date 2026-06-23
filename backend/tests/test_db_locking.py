@@ -91,14 +91,15 @@ def _assert_no_write_lock_held():
 
 @respx.mock
 def test_no_write_lock_held_during_digest_llm_calls(auth_client, db_session):
+    from sqlalchemy import update
+
     from app.models import Category, Email
+    from app.models import Digest as DigestModel
     from app.services import settings_service
     from tests.test_m5_digests import TG_SEND, tg_ok  # noqa: F401 (fixtures pattern)
 
     settings_service.set_setting(db_session, "telegram_bot_token", "123:abc")
     settings_service.set_setting(db_session, "telegram_default_chat_id", "5")
-    # Synthesize mode is the one that calls the LLM at digest time.
-    settings_service.set_setting(db_session, "digest_mode", "synthesize")
     cat = Category(name="MarketNews", criteria_md="m")
     db_session.add(cat)
     db_session.flush()
@@ -109,6 +110,11 @@ def test_no_write_lock_held_during_digest_llm_calls(auth_client, db_session):
     db_session.commit()
     digest = auth_client.post("/api/v1/digests", json={
         "name": "d", "category_ids": [cat.id], "min_confidence": 0.5}).json()
+    # Synthesize mode is the one that calls the LLM at digest time.
+    # digest_mode is now per-digest (not a global setting), so update it directly.
+    db_session.execute(
+        update(DigestModel).where(DigestModel.id == digest["id"]).values(mode="synthesize"))
+    db_session.commit()
 
     def llm_side_effect(request):
         _assert_no_write_lock_held()
