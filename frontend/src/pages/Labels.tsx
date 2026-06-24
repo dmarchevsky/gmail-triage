@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ColorSwatch, Label, del, errMsg, get, post, put } from "../api";
 import { ConfirmDialog, LabelPill, Modal, SwatchPicker } from "../components";
 import { useToast } from "../toast";
+import { Pencil, Trash2 } from "lucide-react";
 
 function LabelEditor({
   label,
@@ -104,12 +105,22 @@ export default function Labels() {
             {labels.map((lb) => (
               <tr key={lb.id}>
                 <td data-label="Label">
+                {lb.is_system ? (
                   <LabelPill
                     name={lb.name}
                     textColor={lb.text_color}
                     backgroundColor={lb.background_color}
                   />
-                </td>
+                ) : (
+                  <button className="name-link label-name-link" onClick={() => setEditing(lb)}>
+                    <LabelPill
+                      name={lb.name}
+                      textColor={lb.text_color}
+                      backgroundColor={lb.background_color}
+                    />
+                  </button>
+                )}
+              </td>
                 <td data-label="Gmail">
                   {lb.is_system
                     ? "built-in"
@@ -120,9 +131,11 @@ export default function Labels() {
                 <td className="row-actions">
                   {!lb.is_system && (
                     <>
-                      <button onClick={() => setEditing(lb)}>Edit</button>
-                      <button className="danger" onClick={() => setDeleting(lb)}>
-                        Delete
+                      <button className="icon-btn" title="Edit" onClick={() => setEditing(lb)}>
+                        <Pencil size={15} />
+                      </button>
+                      <button className="icon-btn danger" title="Delete" onClick={() => setDeleting(lb)}>
+                        <Trash2 size={15} />
                       </button>
                     </>
                   )}

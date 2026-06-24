@@ -7,6 +7,16 @@ import {
   Routes,
   useLocation,
 } from "react-router-dom";
+import {
+  Filter,
+  LayoutDashboard,
+  Mail,
+  MessageCircle,
+  Send,
+  Settings as SettingsIcon,
+  Tag,
+  Tags,
+} from "lucide-react";
 import { ApiError, Settings, StatusResponse, get, post } from "./api";
 import { ToastProvider } from "./toast";
 import Dashboard from "./pages/Dashboard";
@@ -177,17 +187,18 @@ function Shell() {
         <span className="mobile-title">MailTriage</span>
       </div>
       {navOpen && <div className="nav-backdrop" onClick={closeNav} />}
-      <button
-        className="sidebar-expand icon-btn"
-        onClick={toggleCollapsed}
-        title="Expand sidebar"
-        aria-label="Expand sidebar"
-      >
-        »
-      </button>
       <aside className={`sidebar ${navOpen ? "open" : ""}`}>
         <div className="logo-row">
-          <img className="logo-mark" src="/favicon.svg" alt="" width={20} height={20} />
+          <img
+            className="logo-mark"
+            src="/favicon.svg"
+            alt="MailTriage"
+            width={20}
+            height={20}
+            style={{ cursor: "pointer" }}
+            title={collapsed ? "Expand sidebar" : undefined}
+            onClick={collapsed ? toggleCollapsed : undefined}
+          />
           <h1 className="logo">MailTriage</h1>
           <button
             className="collapse-btn icon-btn"
@@ -199,14 +210,30 @@ function Shell() {
           </button>
         </div>
         <nav onClick={closeNav}>
-          <NavLink to="/">Dashboard</NavLink>
-          <NavLink to="/emails">Emails</NavLink>
-          <NavLink to="/categories">Categories</NavLink>
-          <NavLink to="/labels">Labels</NavLink>
-          <NavLink to="/rules">Rules</NavLink>
-          <NavLink to="/digests">Digests</NavLink>
-          <NavLink to="/feedback">Feedback</NavLink>
-          <NavLink to="/settings">Settings</NavLink>
+          <NavLink to="/" title="Dashboard">
+            <LayoutDashboard size={16} /><span className="nav-label">Dashboard</span>
+          </NavLink>
+          <NavLink to="/emails" title="Emails">
+            <Mail size={16} /><span className="nav-label">Emails</span>
+          </NavLink>
+          <NavLink to="/categories" title="Categories">
+            <Tag size={16} /><span className="nav-label">Categories</span>
+          </NavLink>
+          <NavLink to="/labels" title="Labels">
+            <Tags size={16} /><span className="nav-label">Labels</span>
+          </NavLink>
+          <NavLink to="/rules" title="Rules">
+            <Filter size={16} /><span className="nav-label">Rules</span>
+          </NavLink>
+          <NavLink to="/digests" title="Digests">
+            <Send size={16} /><span className="nav-label">Digests</span>
+          </NavLink>
+          <NavLink to="/feedback" title="Feedback">
+            <MessageCircle size={16} /><span className="nav-label">Feedback</span>
+          </NavLink>
+          <NavLink to="/settings" title="Settings">
+            <SettingsIcon size={16} /><span className="nav-label">Settings</span>
+          </NavLink>
         </nav>
         <div className="sidebar-foot">
           <SidebarStatus />

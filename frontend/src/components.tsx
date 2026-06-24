@@ -304,6 +304,36 @@ export function BulkActionBar({
   );
 }
 
+// ── Toggle (pill switch) ─────────────────────────────────────────────────────
+
+export function Toggle({
+  checked,
+  onChange,
+  disabled,
+  title,
+  className,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  title?: string;
+  className?: string;
+}) {
+  return (
+    <label className={`toggle${disabled ? " disabled" : ""}${className ? ` ${className}` : ""}`} title={title}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="toggle-track">
+        <span className="toggle-thumb" />
+      </span>
+    </label>
+  );
+}
+
 // ── Small async-action button with busy/error state ─────────────────────────
 
 export function AsyncButton({
@@ -311,17 +341,20 @@ export function AsyncButton({
   children,
   className,
   disabled,
+  title,
 }: {
   onClick: () => Promise<void>;
   children: ReactNode;
   className?: string;
   disabled?: boolean;
+  title?: string;
 }) {
   const [busy, setBusy] = useState(false);
   return (
     <button
       className={className}
       disabled={disabled || busy}
+      title={title}
       onClick={async () => {
         setBusy(true);
         try {

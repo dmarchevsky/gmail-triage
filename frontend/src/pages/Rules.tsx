@@ -3,14 +3,15 @@ import { Category, Label, Rule, RuleAction, del, delWithBody, errMsg, get, post,
 import { useSelection } from "../useSelection";
 import {
   ActionBadges,
-  Badge,
   BulkActionBar,
   ConfirmDialog,
   Modal,
+  Toggle,
   actionLabel,
   pct,
 } from "../components";
 import { useToast } from "../toast";
+import { Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 const ACTION_TYPES: RuleAction["type"][] = [
   "add_label",
@@ -610,11 +611,13 @@ export default function Rules() {
               </td>
               <td data-label="Name">
                 {r.is_default ? (
-                  <b>
-                    <i>{r.name}</i>
-                  </b>
+                  <button className="name-link" onClick={() => setEditingDefault(r)}>
+                    <b><i>{r.name}</i></b>
+                  </button>
                 ) : (
-                  <b>{r.name}</b>
+                  <button className="name-link" onClick={() => setEditing(r)}>
+                    <b>{r.name}</b>
+                  </button>
                 )}
               </td>
               <td data-label="Match">
@@ -641,7 +644,18 @@ export default function Rules() {
                 }))} />
               </td>
               <td data-label="Mode">
-                {r.dry_run ? <Badge tone="dry">DRY RUN</Badge> : <Badge tone="ok">LIVE</Badge>}
+                <Toggle
+                  className="toggle-mode"
+                  checked={!r.dry_run}
+                  title={r.dry_run ? "DRY RUN — click to go live" : "LIVE — click for dry-run"}
+                  onChange={(v) => {
+                    if (v) {
+                      setGoingLive(r);
+                    } else {
+                      void setMode(r, true);
+                    }
+                  }}
+                />
                 {r.pending_planned > 0 && (
                   <div className="sub">
                     {r.pending_planned} planned
@@ -657,20 +671,29 @@ export default function Rules() {
                 )}
               </td>
               <td data-label="Flow">{r.stop_processing ? "stop" : "continue"}</td>
-              <td data-label="Enabled">{r.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Enabled">
+                <Toggle
+                  checked={r.enabled}
+                  onChange={async (v) => {
+                    await put<Rule>(`/rules/${r.id}`, ruleBody(r, { enabled: v }));
+                    load();
+                  }}
+                />
+              </td>
               <td className="row-actions">
-                {r.dry_run ? (
-                  <button onClick={() => setGoingLive(r)}>Go live</button>
-                ) : (
-                  <button onClick={() => setMode(r, true)}>To dry-run</button>
-                )}
-                <button onClick={() => setReapplying(r)}>Reapply</button>
-                <button onClick={() => (r.is_default ? setEditingDefault(r) : setEditing(r))}>
-                  Edit
+                <button className="icon-btn" title="Reapply" onClick={() => setReapplying(r)}>
+                  <RefreshCw size={15} />
+                </button>
+                <button
+                  className="icon-btn"
+                  title="Edit"
+                  onClick={() => (r.is_default ? setEditingDefault(r) : setEditing(r))}
+                >
+                  <Pencil size={15} />
                 </button>
                 {!r.is_default && (
-                  <button className="danger" onClick={() => setDeleting(r)}>
-                    Delete
+                  <button className="icon-btn danger" title="Delete" onClick={() => setDeleting(r)}>
+                    <Trash2 size={15} />
                   </button>
                 )}
               </td>

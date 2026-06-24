@@ -7,10 +7,12 @@ import {
   BulkActionBar,
   ConfirmDialog,
   Modal,
+  Toggle,
   fmtDate,
   pct,
 } from "../components";
 import { useToast } from "../toast";
+import { History, Pencil, Send, Trash2 } from "lucide-react";
 
 interface DigestForm {
   name: string;
@@ -383,14 +385,38 @@ export default function Digests() {
                 />
               </td>
               <td data-label="Name">
-                <b>{d.name}</b>
+                <button className="name-link" onClick={() => setEditing(d)}>
+                  <b>{d.name}</b>
+                </button>
               </td>
               <td data-label="Schedule">
                 {d.cron_times.join(", ")} <span className="sub">{d.timezone}</span>
               </td>
               <td data-label="Categories">{catNames(d.category_ids) || "—"}</td>
               <td data-label="Min conf.">{pct(d.min_confidence)}</td>
-              <td data-label="Enabled">{d.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Enabled">
+                <Toggle
+                  checked={d.enabled}
+                  onChange={async (v) => {
+                    await put(`/digests/${d.id}`, {
+                      name: d.name,
+                      enabled: v,
+                      category_ids: d.category_ids,
+                      cron_times: d.cron_times,
+                      timezone: d.timezone,
+                      min_confidence: d.min_confidence,
+                      telegram_chat_id: d.telegram_chat_id,
+                      include_links: d.include_links,
+                      include_metadata: d.include_metadata,
+                      max_emails: d.max_emails,
+                      send_no_news: d.send_no_news,
+                      mode: d.mode,
+                      email_threshold: d.email_threshold,
+                    });
+                    load();
+                  }}
+                />
+              </td>
               <td data-label="Status">
                 {d.last_run ? (
                   <Badge tone={runTone(d.last_run.status)}>{d.last_run.status}</Badge>
@@ -400,24 +426,8 @@ export default function Digests() {
               </td>
               <td className="row-actions">
                 <AsyncButton
-                  disabled={d.last_run?.status === "running"}
-                  onClick={async () => {
-                    const r = await post<DigestRun>(`/digests/${d.id}/run-now`, {
-                      preview: true,
-                    });
-                    load();
-                    toast.success(
-                      r.status === "running"
-                        ? "Already running — see Runs"
-                        : r.status === "empty"
-                          ? "No eligible emails."
-                          : `Preview rendered (${r.email_ids.length} emails) — see Runs`,
-                    );
-                  }}
-                >
-                  Preview
-                </AsyncButton>
-                <AsyncButton
+                  className="icon-btn"
+                  title="Send now"
                   disabled={d.last_run?.status === "running"}
                   onClick={async () => {
                     const r = await post<DigestRun>(`/digests/${d.id}/run-now`, {});
@@ -434,12 +444,16 @@ export default function Digests() {
                     else toast.success(message);
                   }}
                 >
-                  Send now
+                  <Send size={15} />
                 </AsyncButton>
-                <button onClick={() => setHistory(d)}>Runs</button>
-                <button onClick={() => setEditing(d)}>Edit</button>
-                <button className="danger" onClick={() => setDeleting(d)}>
-                  Delete
+                <button className="icon-btn" title="Run history" onClick={() => setHistory(d)}>
+                  <History size={15} />
+                </button>
+                <button className="icon-btn" title="Edit" onClick={() => setEditing(d)}>
+                  <Pencil size={15} />
+                </button>
+                <button className="icon-btn danger" title="Delete" onClick={() => setDeleting(d)}>
+                  <Trash2 size={15} />
                 </button>
               </td>
             </tr>

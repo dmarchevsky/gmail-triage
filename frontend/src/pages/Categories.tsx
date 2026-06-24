@@ -21,10 +21,12 @@ import {
   LabelPill,
   Modal,
   SwatchPicker,
+  Toggle,
   fmtDate,
   pct,
 } from "../components";
 import { useToast } from "../toast";
+import { Clock, Pencil, Trash2 } from "lucide-react";
 
 function CategoryEditor({
   category,
@@ -498,17 +500,37 @@ export default function Categories() {
                 />
               </td>
               <td data-label="Name">
-                <b>{c.name}</b>
+                <button className="name-link" onClick={() => setEditing(c)}>
+                  <b>{c.name}</b>
+                </button>
                 {c.description && <div className="sub">{c.description}</div>}
               </td>
               <td data-label="Criteria" className="ellipsis criteria-preview">{c.criteria_md.slice(0, 80)}</td>
               <td data-label="Version">v{c.criteria_version}</td>
-              <td data-label="Enabled">{c.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>}</td>
+              <td data-label="Enabled">
+                <Toggle
+                  checked={c.enabled}
+                  onChange={async (v) => {
+                    await put(`/categories/${c.id}`, {
+                      name: c.name,
+                      description: c.description,
+                      criteria_md: c.criteria_md,
+                      criteria_version: c.criteria_version,
+                      enabled: v,
+                    });
+                    load();
+                  }}
+                />
+              </td>
               <td className="row-actions">
-                <button onClick={() => setEditing(c)}>Edit</button>
-                <button onClick={() => setHistory(c)}>History</button>
-                <button className="danger" onClick={() => setDeleting(c)}>
-                  Delete
+                <button className="icon-btn" title="Edit" onClick={() => setEditing(c)}>
+                  <Pencil size={15} />
+                </button>
+                <button className="icon-btn" title="History" onClick={() => setHistory(c)}>
+                  <Clock size={15} />
+                </button>
+                <button className="icon-btn danger" title="Delete" onClick={() => setDeleting(c)}>
+                  <Trash2 size={15} />
                 </button>
               </td>
             </tr>

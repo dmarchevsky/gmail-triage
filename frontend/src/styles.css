@@ -63,6 +63,42 @@ button.danger {
   background: transparent;
 }
 
+.icon-btn {
+  border-radius: 4px;
+}
+
+.icon-btn:hover {
+  background: var(--border);
+}
+
+.icon-btn.danger {
+  color: var(--danger);
+  background: transparent;
+  border-color: transparent;
+}
+.icon-btn.danger:hover {
+  background: var(--border);
+}
+
+/* clickable name cell in tables */
+.name-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  display: inline;
+}
+.name-link:hover {
+  text-decoration: underline;
+}
+.label-name-link {
+  display: inline-flex;
+}
+
 input,
 select,
 textarea {
@@ -123,8 +159,7 @@ code {
 }
 
 /* Sidebar collapse is a desktop-only affordance (mobile uses the drawer). */
-.collapse-btn,
-.sidebar-expand {
+.collapse-btn {
   display: none;
 }
 
@@ -135,26 +170,40 @@ code {
     font-size: 1.1rem;
     line-height: 1;
   }
+  /* Collapsed: shrink to icon strip instead of hiding */
   .shell.sidebar-collapsed .sidebar {
+    width: 52px;
+    padding: 0.75rem 0.4rem;
+    overflow: hidden;
+  }
+  .shell.sidebar-collapsed .logo {
     display: none;
   }
-  .shell.sidebar-collapsed .sidebar-expand {
-    display: inline-flex;
-    position: fixed;
-    top: 0.6rem;
-    left: 0.4rem;
-    z-index: 30;
-    width: 34px;
-    height: 36px;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.1rem;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+  .shell.sidebar-collapsed .collapse-btn {
+    display: none;
   }
-  .shell.sidebar-collapsed .content {
-    padding-left: 2.6rem;
+  .shell.sidebar-collapsed .logo-row {
+    justify-content: center;
+  }
+  .shell.sidebar-collapsed .logo-mark {
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+  }
+  .shell.sidebar-collapsed .sidebar-foot {
+    display: none;
+  }
+  .shell.sidebar-collapsed .sidebar nav a {
+    justify-content: center;
+    padding: 0.6rem 0;
+    width: 100%;
+  }
+  .shell.sidebar-collapsed .sidebar nav a svg {
+    width: 20px;
+    height: 20px;
+  }
+  .shell.sidebar-collapsed .nav-label {
+    display: none;
   }
 }
 
@@ -165,6 +214,9 @@ code {
 }
 
 .sidebar nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.45rem 0.6rem;
   border-radius: 6px;
   color: var(--fg);
@@ -336,6 +388,58 @@ code {
   background: #dcfce7;
   border-color: #16a34a;
   color: #14532d;
+}
+
+/* pill toggle switch */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  line-height: 1;
+}
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  background: var(--border);
+  border-radius: 9px;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.toggle input:checked + .toggle-track {
+  background: var(--accent);
+}
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  transition: left 0.15s;
+}
+.toggle input:checked + .toggle-track .toggle-thumb {
+  left: 16px;
+}
+.toggle.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Mode toggle: amber = DRY RUN, green = LIVE */
+.toggle-mode .toggle-track {
+  background: #f59e0b;
+}
+.toggle-mode input:checked + .toggle-track {
+  background: #16a34a;
 }
 
 .dry-run-banner {
@@ -562,6 +666,15 @@ tr.clickable {
 
 .row-actions button {
   margin-right: 0.3rem;
+}
+
+.row-actions .icon-btn {
+  padding: 0.25rem;
+  margin-right: 0.1rem;
+}
+
+.row-actions .icon-btn svg {
+  display: block;
 }
 
 .order-cell {
