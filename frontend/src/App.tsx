@@ -6,6 +6,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
 } from "react-router-dom";
 import {
   Filter,
@@ -18,7 +19,7 @@ import {
   Tags,
 } from "lucide-react";
 import { ApiError, Settings, StatusResponse, get, post } from "./api";
-import { ToastProvider } from "./toast";
+import { ToastProvider, useToast } from "./toast";
 import Dashboard from "./pages/Dashboard";
 import Emails from "./pages/Emails";
 import Categories from "./pages/Categories";
@@ -150,6 +151,8 @@ function SidebarStatus() {
 
 function Shell() {
   const { settings } = useApp();
+  const toast = useToast();
+  const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1",
@@ -157,6 +160,23 @@ function Shell() {
   const location = useLocation();
   // Close the mobile nav drawer whenever the route changes.
   useEffect(() => setNavOpen(false), [location.pathname]);
+
+  // Handle OAuth callback redirects: backend appends ?gmail_connected=1 or
+  // ?gmail_error=auth_failed to the root URL after the Google consent flow.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("gmail_connected");
+    const err = params.get("gmail_error");
+    if (!connected && !err) return;
+    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+    if (connected === "1") {
+      toast.success("Gmail connected successfully");
+      navigate("/settings?tab=mailbox");
+    } else if (err === "auth_failed") {
+      toast.error("Gmail connection failed — please try again");
+      navigate("/settings?tab=mailbox");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleCollapsed = () =>
     setCollapsed((c) => {

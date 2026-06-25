@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { GmailLabel, Settings, del, errMsg, get, post, put } from "../api";
-import { AsyncButton, Badge, ConfirmDialog } from "../components";
+import { AsyncButton, Badge, ConfirmDialog, ErrorNote } from "../components";
 import { useToast } from "../toast";
 import { useApp } from "../App";
 
@@ -295,45 +295,73 @@ export function GmailConnect({
         )}
       </h3>
       {connected ? (
-        <>
-          <p>
-            Connected as <b>{status?.gmail.email}</b>{" "}
-            <Badge
-              tone={
-                status?.gmail.status === "auth_error" || status?.gmail.status === "error"
-                  ? "error"
-                  : "ok"
-              }
-            >
-              {status?.gmail.status}
-            </Badge>
-          </p>
-          <p className="sub">
-            Scope: <code>gmail.modify</code> only — MailTriage cannot send email.
-          </p>
-          {ingestion && <IngestionControls {...ingestion} />}
-          <button
-            className="danger"
-            onClick={() => setDisconnecting(true)}
-          >
-            Disconnect
-          </button>
-          {disconnecting && (
-            <ConfirmDialog
-              title="Disconnect Gmail?"
-              danger
-              confirmLabel="Disconnect"
-              message={<p>The token is revoked at Google and removed locally.</p>}
-              onConfirm={async () => {
-                await del("/gmail/auth");
-                setDisconnecting(false);
-                await refresh();
-                onChange?.();
-              }}
-              onCancel={() => setDisconnecting(false)}
+        status?.gmail.status === "auth_error" ? (
+          <>
+            <ErrorNote
+              error={status.poller.last_error ?? "Token expired or revoked."}
             />
-          )}
-        </>
+            <p>
+              Was connected as <b>{status.gmail.email}</b>
+            </p>
+            <AsyncButton className="primary" onClick={start}>
+              Reconnect
+            </AsyncButton>{" "}
+            <button className="danger" onClick={() => setDisconnecting(true)}>
+              Disconnect
+            </button>
+            {disconnecting && (
+              <ConfirmDialog
+                title="Disconnect Gmail?"
+                danger
+                confirmLabel="Disconnect"
+                message={<p>The token is revoked at Google and removed locally.</p>}
+                onConfirm={async () => {
+                  await del("/gmail/auth");
+                  setDisconnecting(false);
+                  await refresh();
+                  onChange?.();
+                }}
+                onCancel={() => setDisconnecting(false)}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            <p>
+              Connected as <b>{status?.gmail.email}</b>{" "}
+              <Badge
+                tone={status?.gmail.status === "error" ? "error" : "ok"}
+              >
+                {status?.gmail.status}
+              </Badge>
+            </p>
+            <p className="sub">
+              Scope: <code>gmail.modify</code> only — MailTriage cannot send email.
+            </p>
+            {ingestion && <IngestionControls {...ingestion} />}
+            <button
+              className="danger"
+              onClick={() => setDisconnecting(true)}
+            >
+              Disconnect
+            </button>
+            {disconnecting && (
+              <ConfirmDialog
+                title="Disconnect Gmail?"
+                danger
+                confirmLabel="Disconnect"
+                message={<p>The token is revoked at Google and removed locally.</p>}
+                onConfirm={async () => {
+                  await del("/gmail/auth");
+                  setDisconnecting(false);
+                  await refresh();
+                  onChange?.();
+                }}
+                onCancel={() => setDisconnecting(false)}
+              />
+            )}
+          </>
+        )
       ) : (
         <>
           <p className="sub">
