@@ -221,7 +221,7 @@ def pipeline(auth_client, db_session):
 
 def classify_ok(category="MarketNews", confidence=0.9):
     return llm_response({"category": category, "confidence": confidence,
-                         "rationale": "r"})
+                         "rationale": "r", "summary": ""})
 
 
 @respx.mock

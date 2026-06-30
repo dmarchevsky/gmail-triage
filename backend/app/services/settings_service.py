@@ -64,6 +64,8 @@ DEFAULTS: dict[str, Any] = {
     # temperature=0 is deterministic; raise it slightly if the model stops after one line.
     # max_tokens=0 means use the built-in formula (synthesis_chars // 4 + 64); set higher
     # for thinking models that need budget for the reasoning phase before writing output.
+    "llm_classify_enable_thinking": False,
+    "llm_classify_max_tokens": 0,   # 0 = use depth-based default from _SUMMARY_MAX_TOKENS
     "llm_synthesis_enable_thinking": False,
     "llm_synthesis_temperature": 0.0,
     "llm_synthesis_max_tokens": 0,

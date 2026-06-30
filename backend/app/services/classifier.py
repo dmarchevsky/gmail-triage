@@ -33,13 +33,13 @@ _LLM_BACKOFF = 60  # seconds to wait after LLMUnavailable before retrying
 _RECOVERY_INTERVAL = 60  # seconds between recovery sweeps (stall_checker)
 _ERROR_RETRY_EVERY = 10  # retry `error` emails every Nth sweep (~10 min)
 
-# Output-token cap for summarization. Bounds wall-clock time for local models.
-# Thinking/reasoning models use all of this budget for reasoning_content and
-# emit nothing in content; chat_text() extracts the answer from reasoning_content.
+# Output-token cap for the combined classify+summarize call. Bounds wall-clock
+# time for local models; extended needs more room for a detailed paragraph.
 _SUMMARY_MAX_TOKENS = {"concise": 1024, "default": 2048, "extended": 4096}
 
 # Character limit passed to the LLM prompt so the model targets the right length.
 _SUMMARY_MAX_CHARS = {"concise": 150, "default": 350, "extended": 700}
+
 
 
 def strip_summary_html(text: str) -> str:
@@ -68,15 +68,18 @@ CLASSIFICATION_SCHEMA_TEMPLATE = {
         "category": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "rationale": {"type": "string"},
+        "summary": {"type": "string"},
     },
-    "required": ["category", "confidence", "rationale"],
+    "required": ["category", "confidence", "rationale", "summary"],
     "additionalProperties": False,
 }
 
 
 def build_classification_prompt(categories: list[Category], email: Email,
                                 body: str, max_body_chars: int,
-                                system_prompt: str) -> tuple[str, str, dict]:
+                                system_prompt: str,
+                                summarization_depth: str = "default",
+                                settings: dict | None = None) -> tuple[str, str, dict]:
     categories_block = "\n\n".join(
         f"### {c.name}\n{c.criteria_md.strip() or '(no criteria provided)'}"
         for c in categories
@@ -92,38 +95,11 @@ def build_classification_prompt(categories: list[Category], email: Email,
               "properties": {**CLASSIFICATION_SCHEMA_TEMPLATE["properties"],
                              "category": {"type": "string",
                                           "enum": [c.name for c in categories] + ["none"]}}}
-    return system_prompt, user, schema
+    max_chars = _SUMMARY_MAX_CHARS.get(summarization_depth, _SUMMARY_MAX_CHARS["default"])
+    summary_instruction = settings_service.active_summary_prompt(
+        settings or {}).format(max_chars=max_chars)
+    return system_prompt + "\n" + summary_instruction, user, schema
 
-
-async def summarize_email(email: Email, body: str, settings: dict) -> None:
-    """Generate and store a plain-text summary for `email`, reusing the body
-    already fetched for classification. Best-effort: any failure is logged and
-    leaves `email.summary` unchanged rather than failing the classification."""
-    text = (body or email.snippet or "").strip()
-    if not text:
-        return
-    depth = settings.get("summarization_depth") or "default"
-    max_tokens = _SUMMARY_MAX_TOKENS.get(depth, _SUMMARY_MAX_TOKENS["default"])
-    max_chars = _SUMMARY_MAX_CHARS.get(depth, _SUMMARY_MAX_CHARS["default"])
-    system_prompt = settings_service.active_summary_prompt(settings).format(max_chars=max_chars)
-    user = (f"From: {email.sender}\nSubject: {email.subject}\n"
-            f"Date: {email.received_at}\n{text[:int(settings['classify_body_max_chars'])]}")
-    try:
-        summary = await llm.chat_text(
-            system_prompt, user,
-            timeout=float(settings["llm_classify_timeout_seconds"]),
-            settings=settings,
-            max_concurrency=int(settings["llm_max_concurrency"]),
-            max_tokens=max_tokens,
-        )
-        stripped = summary.strip()
-        cleaned = strip_summary_html(stripped) if stripped else ""
-        email.summary = cleaned or None
-        if email.summary is None:
-            log.warning("email_summary_empty", email_id=email.id,
-                        depth=depth, max_tokens=max_tokens)
-    except llm.LLMError as e:
-        log.warning("email_summary_failed", email_id=email.id, error=str(e))
 
 
 async def fetch_body(session: Session, client: GmailClient, email: Email,
@@ -161,16 +137,25 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
         _audit_classification_failed(session, email, "gmail_not_found", email.error)
         return
     session.commit()  # release the body-hash write before the LLM await
+    depth = settings.get("summarization_depth") or "default"
     system, user, schema = build_classification_prompt(
         categories, email, body, int(settings["classify_body_max_chars"]),
         settings.get("prompt_classification_system")
-        or settings_service.DEFAULTS["prompt_classification_system"])
+        or settings_service.DEFAULTS["prompt_classification_system"],
+        summarization_depth=depth,
+        settings=settings)
+    enable_thinking = bool(settings.get("llm_classify_enable_thinking") or False)
+    max_tok_override = int(settings.get("llm_classify_max_tokens") or 0)
+    max_tokens = max_tok_override if max_tok_override > 0 else _SUMMARY_MAX_TOKENS.get(depth, 2048)
+    extra_body = ({"chat_template_kwargs": {"enable_thinking": True}} if enable_thinking else None)
     try:
         result = await llm.chat_json(
             system, user, schema, "email_classification",
             timeout=float(settings["llm_classify_timeout_seconds"]),
             settings=settings,
             max_concurrency=int(settings["llm_max_concurrency"]),
+            max_tokens=max_tokens,
+            extra_body=extra_body,
         )
     except llm.LLMInvalidOutput as e:
         email.status = EmailStatus.error.value
@@ -192,7 +177,9 @@ async def classify_email(session: Session, client: GmailClient, email: Email,
     email.classified_at = datetime.now(UTC)
     email.status = EmailStatus.classified.value
     email.error = None
-    await summarize_email(email, body, settings)
+    raw_summary = result.get("summary", "")
+    cleaned = strip_summary_html(raw_summary).strip() if raw_summary else ""
+    email.summary = cleaned or None
 
 
 async def classify_one(session: Session, client: GmailClient, email: Email,

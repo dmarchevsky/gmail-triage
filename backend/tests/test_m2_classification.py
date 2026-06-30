@@ -27,24 +27,6 @@ def llm_response(payload: dict | str) -> Response:
     })
 
 
-def classify_then_summarize(responses: list[Response], summary: str = "auto summary."):
-    """respx side_effect: serve `responses` (in order) to the schema-constrained
-    classification calls, and a fixed plain-text `summary` to the summarization
-    call that now fires after every successful classification."""
-    it = iter(responses)
-
-    def handler(request):
-        if '"json_schema"' in request.content.decode():
-            return next(it)
-        return llm_response(summary)
-
-    return handler
-
-
-def schema_call_count(route) -> int:
-    """How many of a route's calls were classification (schema) calls."""
-    return sum('"json_schema"' in c.request.content.decode() for c in route.calls)
-
 
 @pytest.fixture()
 def connected(client, db_session):
@@ -117,7 +99,8 @@ def test_category_crud_and_history(auth_client):
 def test_classify_pending_happy_path(auth_client, db_session, seeded):
     mock_gmail_full(seeded)
     chat = respx.post(CHAT_URL).mock(return_value=llm_response({
-        "category": "MarketNews", "confidence": 0.92, "rationale": "Market commentary."}))
+        "category": "MarketNews", "confidence": 0.92, "rationale": "Market commentary.",
+        "summary": "Futures fell sharply."}))
 
     resp = auth_client.post("/api/v1/classify/run-now")
     assert resp.status_code == 200
@@ -147,13 +130,13 @@ def test_classify_pending_happy_path(auth_client, db_session, seeded):
 
 @respx.mock
 def test_classification_saves_summary_at_configured_depth(auth_client, db_session, seeded):
-    """A successful classification also stores a per-email summary, generated with
-    the prompt for the configured summarization depth."""
+    """Classification stores a per-email summary from the same JSON response.
+    The system prompt includes the depth-appropriate character limit."""
     auth_client.put("/api/v1/settings", json={"summarization_depth": "extended"})
     mock_gmail_full(seeded)
-    chat = respx.post(CHAT_URL).mock(side_effect=classify_then_summarize(
-        [llm_response({"category": "MarketNews", "confidence": 0.9, "rationale": "r"})],
-        summary="A thorough recap of the futures move."))
+    chat = respx.post(CHAT_URL).mock(return_value=llm_response({
+        "category": "MarketNews", "confidence": 0.9, "rationale": "r",
+        "summary": "A thorough recap of the futures move."}))
 
     auth_client.post("/api/v1/classify/run-now")
 
@@ -161,25 +144,18 @@ def test_classification_saves_summary_at_configured_depth(auth_client, db_sessio
     email = db_session.query(Email).one()
     assert email.status == "classified"
     assert email.summary == "A thorough recap of the futures move."
-    # The summary call used the extended-depth system prompt.
-    summary_call = next(c for c in chat.calls
-                        if '"json_schema"' not in c.request.content.decode())
-    system_msg = json.loads(summary_call.request.content)["messages"][0]["content"]
-    assert "thoroughly" in system_msg
+    # System prompt includes the extended-depth char limit (700).
+    system_msg = json.loads(chat.calls[0].request.content)["messages"][0]["content"]
+    assert "700" in system_msg
 
 
 @respx.mock
-def test_summary_failure_keeps_classification(auth_client, db_session, seeded):
-    """If the summarization call fails, the email stays classified (summary NULL)."""
+def test_summary_empty_keeps_classification(auth_client, db_session, seeded):
+    """If the LLM returns an empty summary string, the email stays classified
+    (summary NULL) — empty strings are treated as no summary."""
     mock_gmail_full(seeded)
-
-    def handler(request):
-        if '"json_schema"' in request.content.decode():
-            return llm_response({"category": "MarketNews", "confidence": 0.9,
-                                 "rationale": "r"})
-        return Response(500, json={"error": "boom"})  # summary call fails
-
-    respx.post(CHAT_URL).mock(side_effect=handler)
+    respx.post(CHAT_URL).mock(return_value=llm_response({
+        "category": "MarketNews", "confidence": 0.9, "rationale": "r", "summary": ""}))
     auth_client.post("/api/v1/classify/run-now")
 
     from app.models import Email
@@ -208,13 +184,15 @@ def test_hard_rule_classification_has_no_summary(auth_client, db_session, seeded
 @respx.mock
 def test_invalid_output_one_retry_then_success(auth_client, db_session, seeded):
     mock_gmail_full(seeded)
-    chat = respx.post(CHAT_URL).mock(side_effect=classify_then_summarize([
+    chat = respx.post(CHAT_URL)
+    chat.side_effect = [
         llm_response("I think this is market news!"),  # invalid (no JSON)
-        llm_response({"category": "MarketNews", "confidence": 0.8, "rationale": "ok"}),
-    ]))
+        llm_response({"category": "MarketNews", "confidence": 0.8, "rationale": "ok",
+                      "summary": "Futures fell."}),
+    ]
     resp = auth_client.post("/api/v1/classify/run-now")
     assert resp.json()["classified"] == 1
-    assert schema_call_count(chat) == 2  # one retry (summary call excluded)
+    assert chat.call_count == 2  # one retry, no separate summary call
 
 
 @respx.mock
@@ -239,7 +217,8 @@ def test_invalid_output_twice_marks_error(auth_client, db_session, seeded):
 def test_none_category(auth_client, db_session, seeded):
     mock_gmail_full(seeded)
     respx.post(CHAT_URL).mock(return_value=llm_response({
-        "category": "none", "confidence": 0.7, "rationale": "No criteria apply."}))
+        "category": "none", "confidence": 0.7, "rationale": "No criteria apply.",
+        "summary": ""}))
     auth_client.post("/api/v1/classify/run-now")
 
     from app.models import Email
@@ -284,7 +263,7 @@ def test_body_truncation(auth_client, db_session, seeded, connected):
     seeded["payload"]["parts"][0]["body"]["data"] = b64url("X" * 500)
     mock_gmail_full(seeded)
     chat = respx.post(CHAT_URL).mock(return_value=llm_response({
-        "category": "none", "confidence": 0.5, "rationale": "r"}))
+        "category": "none", "confidence": 0.5, "rationale": "r", "summary": ""}))
     auth_client.post("/api/v1/classify/run-now")
     user_msg = json.loads(chat.calls[0].request.content)["messages"][1]["content"]
     assert "X" * 50 in user_msg
@@ -296,7 +275,7 @@ def test_store_bodies_setting(auth_client, db_session, seeded):
     auth_client.put("/api/v1/settings", json={"store_bodies": True})
     mock_gmail_full(seeded)
     respx.post(CHAT_URL).mock(return_value=llm_response({
-        "category": "none", "confidence": 0.5, "rationale": "r"}))
+        "category": "none", "confidence": 0.5, "rationale": "r", "summary": ""}))
     auth_client.post("/api/v1/classify/run-now")
 
     from app.models import Email
@@ -318,10 +297,12 @@ def test_llm_health_endpoint(auth_client):
 @respx.mock
 def test_reclassify_single_email(auth_client, db_session, seeded):
     mock_gmail_full(seeded)
-    respx.post(CHAT_URL).mock(side_effect=classify_then_summarize([
-        llm_response({"category": "MarketNews", "confidence": 0.9, "rationale": "v1"}),
-        llm_response({"category": "Receipts", "confidence": 0.7, "rationale": "v2"}),
-    ]))
+    respx.post(CHAT_URL).mock(side_effect=[
+        llm_response({"category": "MarketNews", "confidence": 0.9, "rationale": "v1",
+                      "summary": "First summary."}),
+        llm_response({"category": "Receipts", "confidence": 0.7, "rationale": "v2",
+                      "summary": "Second summary."}),
+    ])
     # Rule plans a dry-run action on first classification.
     auth_client.post("/api/v1/rules", json={
         "name": "label market", "match_category_id": 1,

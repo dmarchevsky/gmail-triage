@@ -72,7 +72,8 @@ def _client(base_url: str, timeout: float) -> AsyncOpenAI:
 
 async def chat_json(system: str, user: str, schema: dict, schema_name: str,
                     timeout: float, settings: dict[str, Any] | None = None,
-                    max_concurrency: int = 1) -> dict:
+                    max_concurrency: int = 1, max_tokens: int | None = None,
+                    extra_body: dict | None = None) -> dict:
     """Chat completion that must return JSON matching `schema`.
 
     Tries response_format=json_schema (llama.cpp enforces by grammar); if the
@@ -90,10 +91,16 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
         "json_schema": {"name": schema_name, "schema": schema, "strict": True},
     }
     last_error = ""
+    extra_kwargs: dict = {}
+    if max_tokens is not None and max_tokens > 0:
+        extra_kwargs["max_tokens"] = max_tokens
+    if extra_body:
+        extra_kwargs["extra_body"] = extra_body
     try:
         async with _get_semaphore(max_concurrency):
             for attempt in range(2):
-                kwargs: dict = {"model": model, "messages": messages, "temperature": 0}
+                kwargs: dict = {"model": model, "messages": messages, "temperature": 0,
+                                **extra_kwargs}
                 if response_format is not None:
                     kwargs["response_format"] = response_format
                 try:
@@ -107,7 +114,8 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
                                        system + "\nRespond ONLY with JSON. No prose."}
                         try:
                             completion = await client.chat.completions.create(
-                                model=model, messages=messages, temperature=0)
+                                model=model, messages=messages, temperature=0,
+                                **extra_kwargs)
                         except APIStatusError as e2:
                             raise LLMError(
                                 f"LLM HTTP {e2.status_code}: {e2.message}") from e2

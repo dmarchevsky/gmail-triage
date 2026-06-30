@@ -118,7 +118,7 @@ def test_rule_applies_colored_label_on_first_use(auth_client, db_session, connec
                                  "body": {"data": b64url("Body.")}}]
     respx.get(f"{GMAIL_API}/messages/m1").respond(200, json=full)
     respx.post(CHAT_URL).mock(return_value=llm_response(
-        {"category": "MarketNews", "confidence": 0.9, "rationale": "r"}))
+        {"category": "MarketNews", "confidence": 0.9, "rationale": "r", "summary": ""}))
     respx.get(f"{GMAIL_API}/labels").respond(200, json={"labels": []})
     create = respx.post(f"{GMAIL_API}/labels").respond(
         200, json={"id": "Label_5", "name": "MailTriage/MarketNews"})
