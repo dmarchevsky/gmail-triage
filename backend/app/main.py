@@ -35,6 +35,7 @@ from app.services import classifier, digest_scheduler, llm, settings_service
 from app.services.gmail import assert_scopes_safe
 from app.services.poller import poller_loop
 from app.services.pubsub import pubsub_loop
+from app.services.retention import retention_loop
 
 log = get_logger(__name__)
 
@@ -68,11 +69,12 @@ async def lifespan(app: FastAPI):
     queue_task = asyncio.create_task(classifier.queue_loop())
     stall_task = asyncio.create_task(classifier.stall_checker())
     pubsub_task = asyncio.create_task(pubsub_loop())
+    retention_task = asyncio.create_task(retention_loop(), name="retention")
     digest_scheduler.start()
     log.info("startup_complete", db=cfg.sqlalchemy_url)
     yield
     digest_scheduler.shutdown()
-    tasks = (poller_task, queue_task, stall_task, pubsub_task)
+    tasks = (poller_task, queue_task, stall_task, pubsub_task, retention_task)
     for task in tasks:
         task.cancel()
     with suppress(asyncio.CancelledError):

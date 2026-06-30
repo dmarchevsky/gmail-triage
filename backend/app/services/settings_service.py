@@ -72,6 +72,8 @@ DEFAULTS: dict[str, Any] = {
     # Max classification attempts before an email is left terminally in `error`
     # (the recovery loop retries `error`/stalled emails up to this many times).
     "classify_max_attempts": 5,
+    # How many days of emails to retain. 0 = keep forever (no automatic deletion).
+    "retention_days": 90,
     "telegram_bot_token": "",
     "telegram_default_chat_id": "",
     "gmail_client_secret_json": "",
@@ -153,6 +155,8 @@ def update_settings(session: Session, updates: dict[str, Any]) -> None:
             raise KeyError(f"Setting must be changed via /auth endpoints: {key}")
         if key == "gmail_ingest_mode" and value not in ("poll", "push"):
             raise ValueError(f"gmail_ingest_mode must be 'poll' or 'push', got {value!r}")
+        if key == "retention_days" and int(value) < 0:
+            raise ValueError(f"retention_days must be non-negative, got {value!r}")
         set_setting(session, key, value)
 
 
