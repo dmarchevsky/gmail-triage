@@ -207,6 +207,7 @@ export interface Settings {
   poll_scope_labels: string[];
   poller_paused: boolean;
   first_run_complete: boolean;
+  retention_days: number;
 }
 
 export interface GmailLabel {

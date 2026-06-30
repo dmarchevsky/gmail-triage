@@ -914,6 +914,38 @@ export default function SettingsPage() {
       {tab === "data" && (
         <>
           <div className="settings-section">
+            <h3>Retention</h3>
+            <p className="sub">
+              Emails older than this are permanently deleted once per day.
+              Set to 0 to keep emails forever.
+            </p>
+            <div className="form-grid">
+              <label>
+                Retention period (days; 0 = keep forever)
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="90"
+                  value={num("retention_days")}
+                  onChange={(e) =>
+                    setDraft({ ...draft, retention_days: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+            <button
+              className="primary"
+              onClick={() => {
+                if (draft.retention_days !== undefined)
+                  saveValues({ retention_days: Number(draft.retention_days) });
+                setDraft({});
+              }}
+            >
+              Save
+            </button>
+          </div>
+
+          <div className="settings-section">
             <h3>Config export / import</h3>
             <p className="sub">Full configuration as JSON, excluding secrets.</p>
             <div className="head-actions">
