@@ -177,6 +177,7 @@ function EmailDetail({
         })()}
 
         <AsyncButton
+          className="primary"
           onClick={async () => {
             try {
               const updated = await post<EmailRow>(`/emails/${email.id}/reclassify`);

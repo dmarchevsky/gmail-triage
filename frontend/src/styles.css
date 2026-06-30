@@ -908,6 +908,24 @@ label.checkbox input {
 }
 
 /* email detail */
+.email-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.email-detail > p {
+  margin: 0;
+}
+
+.email-detail h4 {
+  margin: 0.25rem 0 0;
+}
+
+.email-detail > button {
+  align-self: flex-start;
+}
+
 .email-detail .snippet {
   color: var(--muted);
   font-style: italic;
@@ -932,12 +950,15 @@ label.checkbox input {
 
 .feedback-form {
   border-top: 1px solid var(--border);
-  margin-top: 1rem;
   padding-top: 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   align-items: flex-start;
+}
+
+.feedback-form h4 {
+  margin: 0;
 }
 
 .feedback-form select {
