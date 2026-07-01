@@ -272,7 +272,7 @@ export function BulkActionBar({
   onClear,
 }: {
   count: number;
-  actions: { label: string; onClick: () => Promise<void>; danger?: boolean }[];
+  actions: { label: string; mobileLabel?: string; onClick: () => Promise<void>; danger?: boolean }[];
   onClear: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -294,11 +294,13 @@ export function BulkActionBar({
             }
           }}
         >
-          {a.label}
+          <span className="label-full">{a.label}</span>
+          <span className="label-mobile">{a.mobileLabel ?? a.label}</span>
         </button>
       ))}
       <button className="icon-btn" disabled={busy} onClick={onClear}>
-        ✕ Clear
+        <span className="label-full">✕ Clear</span>
+        <span className="label-mobile">✕</span>
       </button>
     </div>
   );

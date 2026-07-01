@@ -686,7 +686,7 @@ tr.clickable {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding: 0.5rem 0.75rem;
   background: var(--card);
   border: 1px solid var(--accent);
@@ -697,7 +697,10 @@ tr.clickable {
 .bulk-count {
   font-weight: 600;
   margin-right: 0.25rem;
+  white-space: nowrap;
 }
+
+.bulk-bar .label-mobile { display: none; }
 
 /* filters & pager */
 .filters {
@@ -773,6 +776,31 @@ tr.clickable {
   .select-page-mobile input {
     width: auto;
     min-width: unset;
+  }
+
+  /* Bulk action bar floats at bottom on mobile so users don't scroll to top */
+  .bulk-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 40;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    border-top: 2px solid var(--accent);
+    margin-bottom: 0;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.18);
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bulk-bar .label-full { display: none; }
+  .bulk-bar .label-mobile { display: inline; }
+
+  /* Add breathing room at the bottom so the floating bar doesn't obscure rows */
+  .emails-bulk-active {
+    padding-bottom: 4rem;
   }
 }
 

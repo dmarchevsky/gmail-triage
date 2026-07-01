@@ -350,7 +350,7 @@ export default function Emails() {
   };
 
   return (
-    <div>
+    <div className={selectedIds.size > 0 ? "emails-bulk-active" : ""}>
       <header className="page-head">
         <h2>Emails</h2>
         {classifying ? (
@@ -446,10 +446,12 @@ export default function Emails() {
         actions={[
           {
             label: "Re-classify (LLM + rules)",
+            mobileLabel: "Re-classify",
             onClick: async () => setBulkConfirm("reclassify"),
           },
           {
             label: "Re-run rules only",
+            mobileLabel: "Re-run rules",
             onClick: doBulkRerunRules,
           },
         ]}
