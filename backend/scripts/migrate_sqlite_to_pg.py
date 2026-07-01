@@ -47,6 +47,17 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
 
     tables = Base.metadata.sorted_tables  # FK-safe order
 
+    # Settings keys seeded by migrations — always present in a fresh target;
+    # excluded from the "target is empty" check and never copied from source
+    # (target already has them from the migration).
+    _SEEDED_SETTING_KEYS = {
+        "prompt_classification_system",
+        "prompt_summary_concise",
+        "prompt_summary_default",
+        "prompt_summary_extended",
+        "prompt_digest_synthesis",
+    }
+
     def _seeded_col(table):
         # Rows seeded by migrations (system labels, the default rule) exist in a
         # freshly-migrated target already; never count or copy them.
@@ -60,6 +71,8 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
         seeded = _seeded_col(table)
         if seeded is not None:
             stmt = stmt.where(seeded.is_not(True))
+        if table.name == "settings" and "key" in table.c:
+            stmt = stmt.where(table.c["key"].not_in(_SEEDED_SETTING_KEYS))
         return conn.execute(stmt).scalar() or 0
 
     with target.connect() as t:
@@ -76,6 +89,8 @@ def migrate(sqlite_path: str, target_url: str, force: bool) -> int:
             seeded = _seeded_col(table)
             if seeded is not None:
                 rows = [r for r in rows if not r.get(seeded.name)]
+            if table.name == "settings":
+                rows = [r for r in rows if r.get("key") not in _SEEDED_SETTING_KEYS]
             if rows:
                 t.execute(insert(table), rows)
             src_count = len(rows)

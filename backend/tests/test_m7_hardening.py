@@ -54,15 +54,14 @@ def test_settings_import_roundtrip(auth_client):
     assert auth_client.get("/api/v1/settings").json()["poll_interval_seconds"] == 600
 
 
-def test_prompt_settings_default_to_disk_and_roundtrip(auth_client):
-    """Editable prompts default to the on-disk prompt files and persist on save;
+def test_prompt_settings_default_to_db_and_roundtrip(auth_client):
+    """Editable prompts default to the inline DEFAULTS values and persist on save;
     summarization depth round-trip."""
-    from app.services.settings_service import _prompt_file
+    from app.services.settings_service import DEFAULTS
 
     settings = auth_client.get("/api/v1/settings").json()
-    assert settings["prompt_classification_system"] == \
-        _prompt_file("classification_system.txt")
-    assert settings["prompt_digest_synthesis"] == _prompt_file("digest_synthesis_system.txt")
+    assert settings["prompt_classification_system"] == DEFAULTS["prompt_classification_system"]
+    assert settings["prompt_digest_synthesis"] == DEFAULTS["prompt_digest_synthesis"]
     assert settings["summarization_depth"] == "default"
 
     auth_client.put("/api/v1/settings", json={
