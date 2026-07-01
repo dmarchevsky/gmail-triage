@@ -223,6 +223,46 @@ def test_synthesize_mode_one_llm_call(auth_client, db_session, digest_setup):
 
 
 @respx.mock
+def test_synthesize_prompt_includes_sender_and_subject(auth_client, db_session,
+                                                       digest_setup):
+    """Synthesis user prompt must include sender name and subject for each email
+    so the LLM can group by sender and reference subjects.
+    Emails must be separated by blank lines to handle multi-line summaries."""
+    d = digest_setup["digest"]
+    _set_digest_mode(db_session, d["id"], "synthesize")
+    chat = mock_llm_text("Synth.")
+    respx.post(TG_SEND).mock(return_value=tg_ok())
+
+    auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    req = json.loads(chat.calls[0].request.content)
+    user_msg = req["messages"][1]["content"]
+    # Sender name (email address used as display name when no Name part)
+    assert "a@x.com" in user_msg
+    assert "b@y.com" in user_msg
+    # Subjects included in the synthesis input
+    assert "S&P up" in user_msg
+    assert "Bonds" in user_msg
+    # Blank-line separation between email blocks (two newlines between entries)
+    assert "\n\n" in user_msg
+
+
+@respx.mock
+def test_synthesize_default_prompt_is_not_event_specific(auth_client, db_session,
+                                                         digest_setup):
+    """The default synthesis system prompt must not contain event-centric language
+    ('concert or event') that would produce wrong output for non-event digests."""
+    d = digest_setup["digest"]
+    _set_digest_mode(db_session, d["id"], "synthesize")
+    chat = mock_llm_text("Synth.")
+    respx.post(TG_SEND).mock(return_value=tg_ok())
+
+    auth_client.post(f"/api/v1/digests/{d['id']}/run-now").json()
+    system_msg = json.loads(chat.calls[0].request.content)["messages"][0]["content"]
+    assert "concert" not in system_msg.lower()
+    assert "event" not in system_msg.lower()
+
+
+@respx.mock
 def test_live_send_and_watermark_no_email_twice(auth_client, db_session, digest_setup):
     tg = respx.post(TG_SEND).mock(return_value=tg_ok())
     d = digest_setup["digest"]

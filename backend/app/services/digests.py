@@ -90,9 +90,20 @@ def _clamp_tokens(tokens: int, settings: dict) -> int:
 
 def _summary_line(email: Email) -> str:
     """One digest line for an email, from its saved summary (snippet fallback).
-    Content only — sender/subject/time live in the message list below."""
+    Used in assemble mode and as the fallback list in synthesis."""
     text = strip_summary_html((email.summary or email.snippet or "").strip())
     return f"- {text}"
+
+
+def _synthesis_block(email: Email) -> str:
+    """Email entry for the synthesis LLM prompt — includes sender and subject as a
+    header so the model can group by sender and reference subjects.  Blocks are
+    joined with blank lines so multi-line (extended-depth) summaries don't blur
+    the boundary between adjacent emails."""
+    sender_name = _display_name(email.sender)
+    subject = email.subject or "(no subject)"
+    text = strip_summary_html((email.summary or email.snippet or "").strip())
+    return f"[{sender_name} | {subject}]\n{text}"
 
 
 async def _summarize(session: Session, digest: Digest, emails: list[Email],
@@ -117,7 +128,7 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
                         ).format(max_chars=synthesis_chars)
     synthesis_user = (
         f"Digest: {digest.name}\nEmails ({len(emails)}):\n\n"
-        + "\n".join(lines) + "\n\nProduce the digest now."
+        + "\n\n".join(_synthesis_block(e) for e in emails) + "\n\nProduce the digest now."
     )
 
     enable_thinking = bool(settings.get("llm_synthesis_enable_thinking") or False)
