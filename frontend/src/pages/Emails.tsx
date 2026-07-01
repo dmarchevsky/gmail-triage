@@ -122,7 +122,8 @@ function EmailDetail({
         )}
         {email.summary && (
           <p className="rationale" style={{ whiteSpace: "pre-line" }}>
-            <b>Summary:</b> {email.summary}
+            <b>Summary:</b>{" "}
+            {email.summary.replace(/ (•)/g, "\n$1")}
           </p>
         )}
         {email.error && <p className="error">Error: {email.error}</p>}
