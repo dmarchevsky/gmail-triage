@@ -430,13 +430,17 @@ def extract_body_text(payload: dict) -> str:
             walk(sub)
 
     walk(payload)
+    candidates: list[str] = []
     if plain:
-        return _clean_body_text("\n".join(plain))
+        candidates.append(_clean_body_text("\n".join(plain)))
     if html:
         soup = BeautifulSoup("\n".join(html), "html.parser")
         raw = re.sub(r"\n{3,}", "\n\n", soup.get_text(separator="\n")).strip()
-        return _clean_body_text(raw)
-    return ""
+        candidates.append(_clean_body_text(raw))
+    # Prefer whichever cleaned version carries more content. For most emails
+    # plain text wins or ties; for HTML-only newsletters (where the plain-text
+    # part is a stripped-down personalised stub) the HTML-derived text wins.
+    return max(candidates, key=len) if candidates else ""
 
 
 def parse_message_meta(msg: dict) -> dict:

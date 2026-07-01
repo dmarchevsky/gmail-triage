@@ -625,7 +625,9 @@ def test_strip_summary_html():
     assert strip_summary_html("Hello &amp; world") == "Hello & world"
     assert strip_summary_html("<b>bold</b> text&nbsp;here") == "bold text here"
     assert strip_summary_html("no html") == "no html"
-    assert strip_summary_html("a  b\n\nc") == "a b c"
+    assert strip_summary_html("a  b\n\nc") == "a b\n\nc"
+    assert strip_summary_html("line1\nline2\nline3") == "line1\nline2\nline3"
+    assert strip_summary_html("  spaces  \n  here  ") == "spaces\nhere"
 
 
 def test_display_name_extraction():

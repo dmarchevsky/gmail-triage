@@ -121,7 +121,7 @@ function EmailDetail({
           </p>
         )}
         {email.summary && (
-          <p className="rationale">
+          <p className="rationale" style={{ whiteSpace: "pre-line" }}>
             <b>Summary:</b> {email.summary}
           </p>
         )}

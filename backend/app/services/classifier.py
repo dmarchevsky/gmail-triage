@@ -40,16 +40,23 @@ _SUMMARY_MAX_TOKENS = {"concise": 1024, "default": 2048, "extended": 4096}
 # Character limit passed to the LLM prompt so the model targets the right length.
 _SUMMARY_MAX_CHARS = {"concise": 150, "default": 350, "extended": 700}
 
+# Multiplier applied to classify_body_max_chars per depth so Extended sees more
+# of long multi-item emails (promotional lists, changelogs, etc.) without
+# changing the default or concise behaviour.
+_BODY_DEPTH_MULTIPLIER = {"concise": 0.5, "default": 1.0, "extended": 2.0}
+
 
 
 def strip_summary_html(text: str) -> str:
     """Remove HTML tags and unescape entities from a stored summary.
 
     Applied at write time (summarize_email) and defensively at read time so
-    old summaries with stray markup are also cleaned."""
+    old summaries with stray markup are also cleaned. Newlines are preserved
+    so list-format summaries (one item per line) survive storage."""
     text = _re.sub(r"<[^>]+>", "", text)
     text = _html.unescape(text)
-    return " ".join(text.split())
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return _re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def _audit_classification_failed(session: Session, email: Email,
@@ -84,12 +91,13 @@ def build_classification_prompt(categories: list[Category], email: Email,
         f"### {c.name}\n{c.criteria_md.strip() or '(no criteria provided)'}"
         for c in categories
     )
+    effective_body_max = int(max_body_chars * _BODY_DEPTH_MULTIPLIER.get(summarization_depth, 1.0))
     user = llm.load_prompt("classification_user.txt").format(
         categories_block=categories_block,
         sender=email.sender or "(unknown)",
         subject=email.subject or "(no subject)",
         date=email.received_at.isoformat() if email.received_at else "(unknown)",
-        body=body[:max_body_chars] if body else "(empty body)",
+        body=body[:effective_body_max] if body else "(empty body)",
     )
     schema = {**CLASSIFICATION_SCHEMA_TEMPLATE,
               "properties": {**CLASSIFICATION_SCHEMA_TEMPLATE["properties"],
