@@ -276,7 +276,7 @@ def test_extract_body_html_fallback():
     }
     text = gmail.extract_body_text(payload)
     assert "Hello" in text and "World" in text
-    assert "x()" not in text or "<script>" not in text
+    assert "x()" not in text  # <script> content must be excluded
 
 
 def test_extract_body_nested_multipart():

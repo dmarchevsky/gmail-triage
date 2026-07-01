@@ -9,6 +9,7 @@ send/draft/insert/import endpoints. The only requested scope is gmail.modify.
 import asyncio
 import base64
 import hashlib
+import html as _html_lib
 import json
 import re
 import secrets
@@ -16,8 +17,8 @@ import urllib.parse
 from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
 
+import html2text as _html2text
 import httpx
-from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -382,6 +383,23 @@ _BOILERPLATE_RE = re.compile(
 )
 
 
+def _html_to_text(html_str: str) -> str:
+    """Convert HTML to readable plain text (Markdown-flavoured) via html2text.
+
+    Creates a fresh parser instance per call for thread safety. Key settings:
+    - ignore_links: keep link text, discard href URLs (handled by _clean_body_text)
+    - ignore_images: skip [image.jpg] placeholder noise
+    - body_width=0: no hard line-wrapping
+    - unicode_snob: prefer Unicode (—, …) over ASCII approximations (--, ...)
+    """
+    h = _html2text.HTML2Text()
+    h.ignore_links = True
+    h.ignore_images = True
+    h.body_width = 0
+    h.unicode_snob = True
+    return h.handle(html_str)
+
+
 def _clean_body_text(text: str) -> str:
     """Strip tracking URLs, newsletter boilerplate, and structural noise from
     extracted email body text so LLMs see content rather than redirect links.
@@ -391,6 +409,7 @@ def _clean_body_text(text: str) -> str:
     - Inline URLs embedded mid-sentence, e.g. "Nasdaq (COMP:IND (https://...))":
       the URL is stripped and empty parens cleaned up, leaving "Nasdaq (COMP:IND)"
     """
+    text = text.replace("\xa0", " ")  # non-breaking spaces → regular spaces
     out: list[str] = []
     for line in text.splitlines():
         if _STANDALONE_URL_RE.match(line):
@@ -410,7 +429,13 @@ def _clean_body_text(text: str) -> str:
 
 
 def extract_body_text(payload: dict) -> str:
-    """Prefer text/plain; fall back to stripped text/html (spec §4.1)."""
+    """Extract readable body text from a Gmail message payload.
+
+    Collects text/plain and text/html MIME parts, cleans each, and returns
+    whichever carries more content. For most emails the plain-text part wins
+    or ties; for HTML-only newsletters (where the plain-text part is a
+    stripped-down personalised stub) the HTML-derived text wins.
+    """
     plain: list[str] = []
     html: list[str] = []
 
@@ -432,14 +457,15 @@ def extract_body_text(payload: dict) -> str:
     walk(payload)
     candidates: list[str] = []
     if plain:
-        candidates.append(_clean_body_text("\n".join(plain)))
+        # Unescape any HTML entities that some mailers embed in plain-text parts
+        # (e.g. &amp;, &nbsp;) and normalise non-breaking spaces.
+        combined = _html_lib.unescape("\n".join(plain))
+        candidates.append(_clean_body_text(combined))
     if html:
-        soup = BeautifulSoup("\n".join(html), "html.parser")
-        raw = re.sub(r"\n{3,}", "\n\n", soup.get_text(separator="\n")).strip()
+        # html2text skips <script>/<style> blocks, decodes entities, and
+        # preserves semantic structure (headers → #, lists → -, bold → **).
+        raw = _html_to_text("\n".join(html))
         candidates.append(_clean_body_text(raw))
-    # Prefer whichever cleaned version carries more content. For most emails
-    # plain text wins or ties; for HTML-only newsletters (where the plain-text
-    # part is a stripped-down personalised stub) the HTML-derived text wins.
     return max(candidates, key=len) if candidates else ""
 
 
