@@ -97,6 +97,7 @@ button.danger {
 }
 .label-name-link {
   display: inline-flex;
+  align-items: center;
 }
 
 input,
