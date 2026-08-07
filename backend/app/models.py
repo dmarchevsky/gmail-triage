@@ -68,6 +68,10 @@ class GmailAuth(Base):
     # Gmail users.watch expiration (epoch ms, as text). NULL = no active watch
     # (poll mode, or push mode not yet watched). The poller renews before lapse.
     watch_expiration: Mapped[str | None] = mapped_column(String(32))
+    # Last time a Telegram "reconnect Gmail" alert was sent for the current
+    # auth-error streak. NULL = no alert outstanding (never failed, or the
+    # connection recovered and poll_once() cleared it). Set by poller.py.
+    last_auth_alert_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
 

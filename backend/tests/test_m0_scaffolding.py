@@ -30,6 +30,21 @@ def test_login_and_settings_roundtrip(auth_client):
     assert resp.json()["poll_interval_seconds"] == 120
 
 
+def test_public_base_url_setting_roundtrips_unredacted(auth_client):
+    """public_base_url is not a secret — it should round-trip in plain text,
+    unlike telegram_bot_token above."""
+    resp = auth_client.get("/api/v1/settings")
+    assert resp.json()["public_base_url"] == ""
+
+    resp = auth_client.put("/api/v1/settings",
+                           json={"public_base_url": "https://host.ts.net:8080"})
+    assert resp.status_code == 200
+    assert resp.json()["public_base_url"] == "https://host.ts.net:8080"
+
+    resp = auth_client.get("/api/v1/settings")
+    assert resp.json()["public_base_url"] == "https://host.ts.net:8080"
+
+
 def test_unknown_setting_rejected(auth_client):
     resp = auth_client.put("/api/v1/settings", json={"nope": 1})
     assert resp.status_code == 400

@@ -197,6 +197,7 @@ export interface Settings {
   prompt_digest_synthesis: string;
   telegram_bot_token_configured: boolean;
   telegram_default_chat_id: string;
+  public_base_url: string;
   gmail_client_secret_json_configured: boolean;
   gmail_ingest_mode: string;
   gmail_pubsub_topic: string;

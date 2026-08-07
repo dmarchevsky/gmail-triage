@@ -869,6 +869,28 @@ export default function SettingsPage() {
                 }
               />
             </label>
+            <label className="span2">
+              Public base URL (optional)
+              <input
+                placeholder="https://mailtriage-host.tailnet-name.ts.net:8080"
+                value={
+                  draft.public_base_url !== undefined
+                    ? draft.public_base_url
+                    : settings.public_base_url
+                }
+                onChange={(e) =>
+                  setDraft({ ...draft, public_base_url: e.target.value })
+                }
+              />
+              <span className="sub">
+                Used to build a reconnect link in Telegram auth-error alerts
+                (e.g. a Tailscale hostname). Leave blank for plain-text
+                instructions instead. Also add{" "}
+                <code>&lt;this-url&gt;/api/v1/gmail/oauth/callback</code> as
+                an authorized redirect URI in your Google Cloud OAuth client,
+                or reconnect will fail.
+              </span>
+            </label>
           </div>
           <div className="head-actions">
             <button
@@ -878,6 +900,8 @@ export default function SettingsPage() {
                 if (telegramToken) values.telegram_bot_token = telegramToken;
                 if (draft.telegram_default_chat_id !== undefined)
                   values.telegram_default_chat_id = draft.telegram_default_chat_id;
+                if (draft.public_base_url !== undefined)
+                  values.public_base_url = draft.public_base_url.trim();
                 saveValues(values).then(() => setTelegramToken(""));
               }}
             >

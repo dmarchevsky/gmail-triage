@@ -100,6 +100,10 @@ DEFAULTS: dict[str, Any] = {
     "retention_days": 90,
     "telegram_bot_token": "",
     "telegram_default_chat_id": "",
+    # Reachable base URL (e.g. Tailscale https://host.tailnet.ts.net:8080) used
+    # only to build the Telegram "reconnect Gmail" link when auth breaks while
+    # you're away from the LAN. Optional; falls back to instructional text when unset.
+    "public_base_url": "",
     "gmail_client_secret_json": "",
     # Ingestion mode. "poll" = periodic history sync only. "push" = Gmail
     # users.watch publishes to a Pub/Sub topic and a background *pull* consumer

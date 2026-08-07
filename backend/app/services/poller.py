@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger, truncate_snippet
 from app.models import Email, EmailStatus
-from app.services import gmail, settings_service
+from app.services import gmail, settings_service, telegram
 from app.services.audit import audit
 from app.services.gmail import (
     GmailAuthError,
@@ -47,6 +47,9 @@ WATCH_RENEW_BEFORE = timedelta(hours=24)
 # In push mode the configured poll interval governs real-time (handled by wakes);
 # the loop itself only needs to poll occasionally as a catch-up safety net.
 PUSH_FALLBACK_POLL_SECONDS = 900
+# Telegram "reconnect Gmail" alert: send immediately on first failure, then at
+# most once per this interval while the auth error persists.
+AUTH_ALERT_COOLDOWN = timedelta(hours=24)
 
 
 def _own_addresses(session: Session) -> set[str]:
@@ -204,8 +207,12 @@ async def poll_once(session: Session) -> dict:
 
     app_state.gmail_status = "ok"
     app_state.gmail_email = client.auth_row.email_address
+    reset_alert = client.auth_row.last_auth_alert_at is not None
+    if reset_alert:
+        client.auth_row.last_auth_alert_at = None
     if new_count:
         audit(session, "system", "poll_completed", {"mode": mode, "new_emails": new_count})
+    if reset_alert or new_count:
         session.commit()
 
     return {"mode": mode, "new_emails": new_count}
@@ -223,6 +230,53 @@ def _record_poll_failure(session, error: str, *, kind: str | None = None) -> Non
         session.commit()
     except Exception:  # noqa: BLE001 — never let audit logging crash the loop
         log.warning("poll_failure_audit_failed", error=error)
+
+
+def _build_auth_alert_message(error: str, base_url: str | None) -> str:
+    lines = [
+        "⚠️ <b>MailTriage: Gmail reconnect needed</b>",
+        f"Polling is failing: <code>{telegram.escape_html(error[:300])}</code>",
+        "This will keep failing every poll cycle until you reconnect Gmail.",
+    ]
+    if base_url:
+        reconnect_url = telegram.escape_html(f"{base_url.rstrip('/')}/#/settings?tab=mailbox")
+        lines.append(f"Reconnect: {reconnect_url}")
+    else:
+        lines.append(
+            "Open MailTriage → Settings → Mailbox and tap Reconnect. (Set a"
+            " \"Public base URL\" in Settings → Notifications to get a direct"
+            " link here when you're away from the LAN.)"
+        )
+    lines.append("You'll get a reminder once every 24h until this is resolved.")
+    return "\n".join(lines)
+
+
+async def _maybe_send_auth_alert(session: Session, error: str) -> None:
+    """Telegram-alert about a Gmail auth failure: immediately the first time,
+    then at most once per AUTH_ALERT_COOLDOWN while it stays broken. Must never
+    raise — called from poller_loop's `except GmailAuthError` clause, which has
+    no outer handler of its own."""
+    try:
+        loaded = gmail.load_token(session)
+        if loaded is None:
+            return  # nothing to persist the cooldown against
+        row, _token = loaded
+        token = settings_service.get_setting(session, "telegram_bot_token")
+        chat_id = settings_service.get_setting(session, "telegram_default_chat_id")
+        if not token or not chat_id:
+            return  # Telegram not configured — nothing to send
+        now = datetime.now(UTC)
+        if row.last_auth_alert_at is not None \
+                and now - row.last_auth_alert_at < AUTH_ALERT_COOLDOWN:
+            return  # still within the 24h cooldown
+        base_url = settings_service.get_setting(session, "public_base_url")
+        message = _build_auth_alert_message(error, base_url)
+        await telegram.send_message(token, str(chat_id), message)
+        row.last_auth_alert_at = now
+        session.commit()
+    except Exception as e:  # noqa: BLE001 — alerting must never crash the poller
+        session.rollback()
+        log.warning("gmail_auth_alert_failed", error=str(e))
 
 
 async def _ensure_watch(session: Session, client: GmailClient) -> None:
@@ -308,6 +362,7 @@ async def poller_loop() -> None:
             app_state.poller_last_error = str(e)
             log.warning("poll_auth_error", error=str(e))
             _record_poll_failure(session, str(e), kind="auth")
+            await _maybe_send_auth_alert(session, str(e))
         except asyncio.CancelledError:
             app_state.poller_status = "stopped"
             raise

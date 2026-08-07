@@ -492,3 +492,99 @@ def test_poll_failure_is_audited(db_session):
     assert rows[0].actor == "system"
     assert rows[0].payload["error"] == "boom: gmail unreachable"
     assert rows[0].payload["kind"] == "auth"
+
+
+# ── Telegram alert on Gmail auth failure ────────────────────────────────────
+
+@respx.mock
+async def test_auth_alert_sent_immediately_on_first_failure(connected, db_session):
+    from app.services import poller, settings_service
+    settings_service.set_setting(db_session, "telegram_bot_token", "TOKEN")
+    settings_service.set_setting(db_session, "telegram_default_chat_id", "555")
+    settings_service.set_setting(db_session, "public_base_url", "https://host.ts.net:8080")
+    db_session.commit()
+    tg = respx.post("https://api.telegram.org/botTOKEN/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))
+    await poller._maybe_send_auth_alert(db_session, "Gmail API returned 401")
+    assert tg.called
+    sent = json.loads(tg.calls.last.request.content)
+    assert "host.ts.net:8080/#/settings?tab=mailbox" in sent["text"]
+    db_session.expire_all()
+    assert connected.last_auth_alert_at is not None
+
+
+def test_build_auth_alert_message_fallback_without_base_url():
+    """No public_base_url configured: the message must fall back to LAN-only
+    instructions rather than a broken/absent link."""
+    from app.services import poller
+
+    message = poller._build_auth_alert_message("some error", "")
+    assert "Open MailTriage → Settings → Mailbox and tap Reconnect." in message
+    assert "Reconnect: " not in message
+
+
+@respx.mock
+async def test_auth_alert_suppressed_within_cooldown(connected, db_session):
+    from datetime import UTC, datetime, timedelta
+
+    from app.services import poller, settings_service
+    settings_service.set_setting(db_session, "telegram_bot_token", "TOKEN")
+    settings_service.set_setting(db_session, "telegram_default_chat_id", "555")
+    connected.last_auth_alert_at = datetime.now(UTC) - timedelta(hours=1)
+    db_session.commit()
+    tg = respx.post("https://api.telegram.org/botTOKEN/sendMessage")
+    await poller._maybe_send_auth_alert(db_session, "boom")
+    assert not tg.called
+
+
+@respx.mock
+async def test_auth_alert_resent_after_cooldown_elapses(connected, db_session):
+    from datetime import UTC, datetime, timedelta
+
+    from app.services import poller, settings_service
+    settings_service.set_setting(db_session, "telegram_bot_token", "TOKEN")
+    settings_service.set_setting(db_session, "telegram_default_chat_id", "555")
+    connected.last_auth_alert_at = datetime.now(UTC) - timedelta(hours=25)
+    db_session.commit()
+    tg = respx.post("https://api.telegram.org/botTOKEN/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))
+    await poller._maybe_send_auth_alert(db_session, "boom")
+    assert tg.called
+
+
+async def test_auth_alert_noop_without_telegram_configured(connected, db_session):
+    from app.services import poller
+    await poller._maybe_send_auth_alert(db_session, "boom")  # must not raise
+    db_session.expire_all()
+    assert connected.last_auth_alert_at is None
+
+
+@respx.mock
+async def test_auth_alert_swallows_telegram_failure(connected, db_session):
+    from app.services import poller, settings_service
+    settings_service.set_setting(db_session, "telegram_bot_token", "TOKEN")
+    settings_service.set_setting(db_session, "telegram_default_chat_id", "555")
+    db_session.commit()
+    respx.post("https://api.telegram.org/botTOKEN/sendMessage").respond(500, json={"ok": False})
+    await poller._maybe_send_auth_alert(db_session, "boom")  # must not raise
+    db_session.expire_all()
+    assert connected.last_auth_alert_at is None  # not marked sent — retries next cycle
+
+
+async def test_poll_once_clears_alert_marker_on_recovery(connected, db_session):
+    """poll_once() success clears a stale alert marker so a future failure
+    alerts immediately rather than waiting out the old cooldown."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.services import gmail, poller
+    connected.last_auth_alert_at = datetime.now(UTC) - timedelta(hours=1)
+    db_session.commit()
+    with respx.mock:
+        # No history_id yet -> baseline path, which also lists messages
+        # (default initial_lookback_hours > 0) before fetching the profile.
+        respx.get(f"{gmail.GMAIL_API}/messages").respond(200, json={"messages": []})
+        respx.get(f"{gmail.GMAIL_API}/profile").respond(200, json={
+            "emailAddress": "me@gmail.test", "historyId": "2000"})
+        await poller.poll_once(db_session)
+    db_session.expire_all()
+    assert connected.last_auth_alert_at is None
