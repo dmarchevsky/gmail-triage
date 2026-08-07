@@ -814,13 +814,17 @@ tr.clickable {
 /* modal */
 .modal-backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--vvh, 100vh);
   background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 4vh 1rem;
   z-index: 50;
+  overflow-y: auto;
 }
 
 .modal {
@@ -828,7 +832,7 @@ tr.clickable {
   border: 1px solid var(--border);
   border-radius: 12px;
   width: min(520px, 100%);
-  max-height: 90vh;
+  max-height: calc(var(--vvh, 100vh) * 0.9);
   overflow: auto;
 }
 

@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 
 const ACTION_LABELS: Record<string, string> = {
   add_label: "Add label",
@@ -147,8 +147,32 @@ export function Modal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Mobile on-screen keyboards shrink the visible area without shrinking
+  // 100vh, so content below a focused input (e.g. a submit button) can end
+  // up clipped by the keyboard with no way to scroll to it. Track the real
+  // visible height so the modal's max-height — and thus its scroll area —
+  // shrinks along with the keyboard.
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const el = backdropRef.current;
+    if (!viewport || !el) return;
+    const update = () => {
+      el.style.setProperty("--vvh", `${viewport.height}px`);
+      el.style.top = `${viewport.offsetTop}px`;
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+    };
+  }, []);
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" ref={backdropRef} onClick={onClose}>
       <div
         className={`modal ${wide ? "modal-wide" : ""}`}
         onClick={(e) => e.stopPropagation()}
