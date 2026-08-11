@@ -282,6 +282,46 @@ def test_store_bodies_setting(auth_client, db_session, seeded):
     assert db_session.query(Email).one().body_text == "Futures fell sharply today."
 
 
+def test_strip_url_query_params_preserves_base_url_and_punctuation():
+    from app.services.classifier import _strip_url_query_params
+
+    text = ("See https://x.com/reg/1?token=abc&x=1 (also https://y.com/z?a=b)"
+            " and https://x.com/reg/1?token=abc.")
+    out = _strip_url_query_params(text)
+    assert "token=abc" not in out
+    assert "https://x.com/reg/1" in out
+    assert "https://y.com/z)" in out  # closing paren preserved
+    assert out.endswith(".")          # trailing sentence punctuation preserved
+
+
+@respx.mock
+def test_classification_strips_url_query_params(auth_client, db_session, seeded, connected):
+    seeded["payload"]["parts"][0]["body"]["data"] = b64url(
+        "Manage your registration: https://practiscore.com/reg/12345?token=abc123&utm=x")
+    mock_gmail_full(seeded)
+    chat = respx.post(CHAT_URL).mock(return_value=llm_response({
+        "category": "none", "confidence": 0.5, "rationale": "r", "summary": ""}))
+    auth_client.post("/api/v1/classify/run-now")
+    user_msg = json.loads(chat.calls[0].request.content)["messages"][1]["content"]
+    assert "https://practiscore.com/reg/12345" in user_msg
+    assert "token=abc123" not in user_msg
+    assert "utm=x" not in user_msg
+
+
+@respx.mock
+def test_classification_strip_does_not_affect_stored_body(auth_client, db_session, seeded):
+    auth_client.put("/api/v1/settings", json={"store_bodies": True})
+    seeded["payload"]["parts"][0]["body"]["data"] = b64url(
+        "Manage your registration: https://practiscore.com/reg/12345?token=abc123")
+    mock_gmail_full(seeded)
+    respx.post(CHAT_URL).mock(return_value=llm_response({
+        "category": "none", "confidence": 0.5, "rationale": "r", "summary": ""}))
+    auth_client.post("/api/v1/classify/run-now")
+
+    from app.models import Email
+    assert "token=abc123" in db_session.query(Email).one().body_text
+
+
 @respx.mock
 def test_llm_health_endpoint(auth_client):
     respx.get(f"{LLM_BASE}/models").respond(200, json={

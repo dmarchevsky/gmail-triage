@@ -69,6 +69,19 @@ def _audit_classification_failed(session: Session, email: Email,
           {"email_id": email.id, "reason": reason, "error": (error or "")[:300]})
 
 
+_URL_QUERY_RE = _re.compile(r'(https?://[^\s?]+)\?[^\s)\]}>"\'.,;]*')
+
+
+def _strip_url_query_params(text: str) -> str:
+    """Remove query strings from URLs, keeping the base URL/path.
+
+    Applied only to the copy of the body sent to the classification LLM, not to
+    the stored body_text. Per-recipient tracking tokens (e.g. a short "manage
+    your registration" link with a ?token=... suffix) otherwise make two
+    structurally-identical templated emails look different to the model."""
+    return _URL_QUERY_RE.sub(r"\1", text)
+
+
 CLASSIFICATION_SCHEMA_TEMPLATE = {
     "type": "object",
     "properties": {
@@ -92,6 +105,7 @@ def build_classification_prompt(categories: list[Category], email: Email,
         for c in categories
     )
     effective_body_max = int(max_body_chars * _BODY_DEPTH_MULTIPLIER.get(summarization_depth, 1.0))
+    body = _strip_url_query_params(body) if body else body
     user = llm.load_prompt("classification_user.txt").format(
         categories_block=categories_block,
         sender=email.sender or "(unknown)",
