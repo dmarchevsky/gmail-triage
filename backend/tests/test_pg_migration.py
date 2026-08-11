@@ -223,3 +223,37 @@ def test_classification_tiebreak_prompt_migration_preserves_user_edit(tmp_path):
             "SELECT value FROM settings WHERE key = 'prompt_classification_system'"
         )).scalar())
     assert value == "My custom prompt."
+
+
+def test_classification_tiebreak_prompt_migration_tolerates_trailing_whitespace_drift(tmp_path):
+    """Regression test for a real production bug: c1c8610c5386's exact-match guard
+    silently no-op'd on an install whose stored value was missing the old default's
+    trailing newline. The follow-up migration must still apply the update."""
+    import json
+
+    from alembic.config import Config as AlembicConfig
+    from sqlalchemy import create_engine, text
+
+    from alembic import command
+    from app.db import BACKEND_DIR
+
+    url = f"sqlite:///{tmp_path}/old.db"
+    cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "3f3e08233e52")
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        # Reproduces the exact bytes found on the live install: old default text
+        # with the trailing "\n" stripped off.
+        conn.execute(text(
+            "UPDATE settings SET value = :v WHERE key = 'prompt_classification_system'"
+        ), {"v": json.dumps(_OLD_CLASSIFICATION_PROMPT.rstrip())})
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        value = json.loads(conn.execute(text(
+            "SELECT value FROM settings WHERE key = 'prompt_classification_system'"
+        )).scalar())
+    assert "more specific" in value
