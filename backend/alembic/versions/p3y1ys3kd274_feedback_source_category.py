@@ -58,11 +58,15 @@ def upgrade() -> None:
     )
 
     # Update feedback rows where correct_category_id != emails.classification_id
+    # (only backfill rows with an actual source/target category conflict)
     conn.execute(
         feedback_tbl.update()
         .where(
             (feedback_tbl.c.correct_category_id.isnot(None)) &
-            (feedback_tbl.c.source_category_id.is_(None))
+            (feedback_tbl.c.correct_category_id != sa.select(
+                emails_tbl.c.classification_id
+            ).where(emails_tbl.c.id == feedback_tbl.c.email_id)
+             .correlate(feedback_tbl).scalar_subquery())
         )
         .values(
             source_category_id=sa.select(emails_tbl.c.classification_id)
