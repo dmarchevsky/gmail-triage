@@ -335,10 +335,16 @@ def approve_proposal(session: Session, feedback: Feedback,
     reviewable. Resolution is deferred until both sides that exist for a row
     are terminal (approved or rejected):
       - `kind == "target"`: covered rows are marked `incorporated` UNLESS the
-        row still has a pending SOURCE proposal — that row is left `open` so
-        it stays reachable (e.g. for `/generate-source-proposal`) rather than
-        vanishing from the open-feedback queue with its source proposal
-        stranded.
+        row has a source category still owed a fix (`source_category_id_for`
+        is set) whose proposal hasn't reached a terminal state yet — that
+        covers a source proposal already `pending_review`, AND the case where
+        it hasn't been generated yet at all (`"none"`, e.g. its debounced
+        background job simply hasn't run yet). Either way the row is left
+        `open` so it stays reachable (e.g. for `/generate-source-proposal`)
+        rather than vanishing from the open-feedback queue with its source
+        fix stranded — `generate_exclusion_proposal_for_category` only finds
+        rows with `status == "open"`, so closing this out early would
+        silently skip the source-side fix forever.
       - `kind == "source"`: never marks rows incorporated on its own (the
         source edit narrows the *losing* category — an independent edit from
         the target side) EXCEPT it completes the resolution deferred above:
@@ -405,11 +411,20 @@ def approve_proposal(session: Session, feedback: Feedback,
 
     now = datetime.now(UTC)
     for fb in session.scalars(select(Feedback).where(Feedback.id.in_(covered_ids))):
+        # Every covered row (not just the representative `feedback` passed in)
+        # was approved as part of this consolidated proposal — record that on
+        # each one so a later completion check (below, and on the other kind)
+        # can see it, not just the representative.
+        setattr(fb, status_attr, ProposalStatus.approved.value)
         if kind == "target":
-            # Leave open if a source proposal is still pending review — resolve
-            # it once that side reaches a terminal state (see kind == "source"
-            # branch below).
-            if fb.proposal_source_status == ProposalStatus.pending_review.value:
+            # Leave open if a source fix is owed and not yet terminal — either
+            # already pending review, or not generated yet (its debounced job
+            # may simply not have run yet). Resolve once that side reaches a
+            # terminal state (see kind == "source" branch below).
+            source_due = source_category_id_for(fb) is not None
+            source_terminal = fb.proposal_source_status in (
+                ProposalStatus.approved.value, ProposalStatus.rejected.value)
+            if source_due and not source_terminal:
                 continue
             fb.status = FeedbackStatus.incorporated.value
             fb.resolved_at = now
@@ -418,7 +433,6 @@ def approve_proposal(session: Session, feedback: Feedback,
             if fb.proposal_status == ProposalStatus.approved.value:
                 fb.status = FeedbackStatus.incorporated.value
                 fb.resolved_at = now
-    setattr(feedback, status_attr, ProposalStatus.approved.value)
     audit(session, "user",
           "criteria_proposal_approved" if kind == "target"
           else "exclusion_proposal_approved",

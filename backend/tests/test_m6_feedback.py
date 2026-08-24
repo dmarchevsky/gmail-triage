@@ -90,7 +90,9 @@ def test_approve_bumps_version_and_history(auth_client, db_session, misclassifie
 
     result = auth_client.post(f"/api/v1/feedback/{fb['id']}/approve").json()
     assert result["criteria_version"] == 2
-    assert result["feedback"]["status"] == "incorporated"
+    # a source fix (narrowing MarketNews) is still owed, so the row stays open
+    # rather than incorporating immediately — see approve_proposal's deferral.
+    assert result["feedback"]["status"] == "open"
     assert result["feedback"]["proposal_status"] == "approved"
 
     db_session.expire_all()
@@ -103,6 +105,13 @@ def test_approve_bumps_version_and_history(auth_client, db_session, misclassifie
     assert history[0]["version"] == 2
     assert history[0]["source"] == "llm_feedback"
     assert history[0]["feedback_ids"] == [fb["id"]]
+
+    # approving the source side too completes the deferred incorporation
+    respx.post(CHAT_URL).mock(return_value=proposal_response("MarketNews, tightened."))
+    auth_client.post(f"/api/v1/feedback/{fb['id']}/generate-source-proposal")
+    final = auth_client.post(
+        f"/api/v1/feedback/{fb['id']}/approve", json={"kind": "source"}).json()
+    assert final["feedback"]["status"] == "incorporated"
 
 
 @respx.mock
@@ -228,15 +237,27 @@ def test_approve_consolidated_incorporates_all(auth_client, db_session,
     result = auth_client.post(f"/api/v1/feedback/{rep['id']}/approve").json()
     assert result["criteria_version"] == 2  # bumped once
 
-    # both feedbacks incorporated; history records both ids
+    # a source fix (narrowing MarketNews) is still owed for both, so they stay
+    # open rather than incorporating immediately.
     db_session.expire_all()
     from app.models import Feedback
     statuses = {f.id: f.status for f in db_session.query(Feedback).all()}
-    assert statuses[fb1["id"]] == "incorporated"
-    assert statuses[fb2["id"]] == "incorporated"
+    assert statuses[fb1["id"]] == "open"
+    assert statuses[fb2["id"]] == "open"
     history = auth_client.get(
         f"/api/v1/categories/{two_misclassified['receipts']}/criteria-history").json()
     assert sorted(history[0]["feedback_ids"]) == sorted([fb1["id"], fb2["id"]])
+
+    # approving the consolidated source fix (covering both) completes incorporation
+    respx.post(CHAT_URL).mock(return_value=proposal_response("MarketNews, tightened."))
+    source_rep = auth_client.post(
+        f"/api/v1/feedback/{fb1['id']}/generate-source-proposal").json()
+    auth_client.post(f"/api/v1/feedback/{source_rep['id']}/approve", json={"kind": "source"})
+
+    db_session.expire_all()
+    statuses = {f.id: f.status for f in db_session.query(Feedback).all()}
+    assert statuses[fb1["id"]] == "incorporated"
+    assert statuses[fb2["id"]] == "incorporated"
     assert auth_client.get("/api/v1/feedback?status=open").json() == []
 
 
@@ -491,6 +512,46 @@ def test_approve_target_first_leaves_source_reachable(auth_client, db_session,
     assert fb_id in [f.id for f in open_source]
     listed = auth_client.get("/api/v1/feedback?status=open").json()
     assert fb_id in [f["id"] for f in listed]
+
+
+@respx.mock
+def test_approve_target_before_source_generated_leaves_source_reachable(
+        auth_client, db_session, peachjar_source_feedback):
+    """Regression: approving the TARGET proposal must not incorporate the row
+    while a source fix is still owed but hasn't been generated yet at all
+    (proposal_source_status == "none", not just "pending_review") — otherwise
+    the row silently falls out of open_feedback_for_source_category and the
+    exclusion proposal is never generated."""
+    respx.post(CHAT_URL).mock(return_value=proposal_response("Ads incl. Peachjar."))
+    fb_id = peachjar_source_feedback["feedback"]
+    auth_client.post(f"/api/v1/feedback/{fb_id}/generate-proposal")
+
+    result = auth_client.post(f"/api/v1/feedback/{fb_id}/approve").json()
+    assert result["feedback"]["status"] == "open"           # NOT incorporated
+    assert result["feedback"]["proposal_status"] == "approved"
+
+    db_session.expire_all()
+    fb = db_session.get(Feedback, fb_id)
+    assert fb.status == "open"
+    assert fb.resolved_at is None
+    assert fb.proposal_source_status == "none"               # not generated yet
+
+    open_source = feedback_service.open_feedback_for_source_category(
+        db_session, peachjar_source_feedback["school"])
+    assert fb_id in [f.id for f in open_source]
+
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    gen = auth_client.post(f"/api/v1/feedback/{fb_id}/generate-source-proposal").json()
+    assert gen["proposal_source_status"] == "pending_review"
+
+    result = auth_client.post(
+        f"/api/v1/feedback/{fb_id}/approve", json={"kind": "source"}).json()
+    assert result["category_id"] == peachjar_source_feedback["school"]
+
+    db_session.expire_all()
+    fb = db_session.get(Feedback, fb_id)
+    assert fb.status == "incorporated"
+    assert fb.resolved_at is not None
 
 
 def test_approve_source_then_target_incorporates(auth_client, db_session,
