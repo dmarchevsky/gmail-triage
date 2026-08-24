@@ -245,6 +245,20 @@ class Feedback(Base):
     # On the representative row of a consolidated proposal: the feedback ids
     # (incl. itself) the proposal covers, so all are considered + incorporated.
     proposal_feedback_ids: Mapped[list | None] = mapped_column(JSON)
+    # Snapshot of email.classification_id at feedback-creation time, for
+    # source-category criteria exclusion proposals (survives later email reclassify).
+    source_category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    # Proposed refinement to the source category's exclusion criteria.
+    proposed_source_criteria_md: Mapped[str | None] = mapped_column(Text)
+    # Explanation for the source-category proposal.
+    proposal_source_explanation: Mapped[str | None] = mapped_column(Text)
+    # Independent lifecycle for source-category proposal (mirrors proposal_status).
+    proposal_source_status: Mapped[str] = mapped_column(
+        String(16), default=ProposalStatus.none.value)
+    # Feedback ids consolidated into this source-category proposal.
+    proposal_source_feedback_ids: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
