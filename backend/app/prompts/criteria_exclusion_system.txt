@@ -6,5 +6,11 @@ behavior for emails that should still match this category. Each email block
 below states the category the user says it actually belongs to. Prefer the
 concrete pattern named in the user's note — a sender, domain, or platform
 name — over a vague generalization; naming it precisely is better than
-hedging. Keep criteria general elsewhere, concise (<300 words), and
+hedging. When the concrete pattern is a sender or domain, phrase the
+exclusion as a literal, mechanically-matchable rule (e.g. "any email whose
+sender address ends in @domain") rather than a descriptive one (e.g.
+"communications delivered through the X platform") — the classifier reads
+these rules alongside the email's raw From header, and literal address
+matching is more reliable than inferring "this domain is the X platform"
+from context. Keep criteria general elsewhere, concise (<300 words), and
 human-readable. Output JSON: {{"criteria_md": "...", "explanation": "..."}}.
