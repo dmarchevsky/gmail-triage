@@ -436,6 +436,180 @@ def test_approve_target_409_when_only_source_proposal_pending(auth_client,
     ).status_code == 409
 
 
+@pytest.fixture()
+def both_pending_feedback(db_session):
+    """A single feedback row with BOTH a pending target proposal (School ->
+    Ads) and a pending source proposal (narrowing School) already stored
+    directly, so tests can approve either side first without depending on
+    LLM-driven generation."""
+    school = Category(name="School", criteria_md="School announcements and forms.")
+    ads = Category(name="Ads", criteria_md="Promotional and marketing email.")
+    db_session.add_all([school, ads])
+    db_session.flush()
+    email = Email(gmail_message_id="both1", sender="noreply@peachjar.com",
+                  subject="New flyer from your school", snippet="Check out this flyer",
+                  status="classified", classification_id=school.id,
+                  confidence=0.65, rationale="Mentions school.",
+                  received_at=datetime.now(UTC))
+    db_session.add(email)
+    db_session.flush()
+    fb = Feedback(email_id=email.id, correct_category_id=ads.id,
+                  source_category_id=school.id,
+                  user_note="This is peachjar, an ad platform.",
+                  proposed_criteria_md="Promotional and marketing email, incl. Peachjar.",
+                  proposal_explanation="Broadened Ads.",
+                  proposal_status="pending_review",
+                  proposed_source_criteria_md="School criteria, excluding Peachjar.",
+                  proposal_source_explanation="Excluded Peachjar.",
+                  proposal_source_status="pending_review")
+    db_session.add(fb)
+    db_session.flush()
+    fb.proposal_feedback_ids = [fb.id]
+    fb.proposal_source_feedback_ids = [fb.id]
+    db_session.commit()
+    return {"school": school.id, "ads": ads.id, "email": email.id, "feedback": fb.id}
+
+
+def test_approve_target_first_leaves_source_reachable(auth_client, db_session,
+                                                       both_pending_feedback):
+    """Critical fix: approving the TARGET proposal must not orphan a still-
+    pending SOURCE proposal — the feedback row must stay 'open' and remain
+    visible to source-proposal machinery."""
+    fb_id = both_pending_feedback["feedback"]
+    result = auth_client.post(f"/api/v1/feedback/{fb_id}/approve").json()
+    assert result["feedback"]["status"] == "open"           # NOT incorporated
+    assert result["feedback"]["proposal_status"] == "approved"
+
+    db_session.expire_all()
+    fb = db_session.get(Feedback, fb_id)
+    assert fb.status == "open"
+    assert fb.resolved_at is None
+
+    # still reachable for source-proposal purposes
+    open_source = feedback_service.open_feedback_for_source_category(
+        db_session, both_pending_feedback["school"])
+    assert fb_id in [f.id for f in open_source]
+    listed = auth_client.get("/api/v1/feedback?status=open").json()
+    assert fb_id in [f["id"] for f in listed]
+
+
+def test_approve_source_then_target_incorporates(auth_client, db_session,
+                                                  both_pending_feedback):
+    """Approving SOURCE first leaves the row open (existing/locked-in
+    behavior); approving TARGET afterward completes the deferred resolution
+    and incorporates it."""
+    fb_id = both_pending_feedback["feedback"]
+
+    result = auth_client.post(f"/api/v1/feedback/{fb_id}/approve",
+                              json={"kind": "source"}).json()
+    assert result["feedback"]["status"] == "open"
+    db_session.expire_all()
+    fb = db_session.get(Feedback, fb_id)
+    assert fb.status == "open"
+    assert fb.resolved_at is None
+
+    result = auth_client.post(f"/api/v1/feedback/{fb_id}/approve").json()
+    assert result["feedback"]["status"] == "incorporated"
+
+    db_session.expire_all()
+    fb = db_session.get(Feedback, fb_id)
+    assert fb.status == "incorporated"
+    assert fb.resolved_at is not None
+
+
+def test_approve_both_orders_incorporate_once_no_clobber(auth_client, db_session,
+                                                          both_pending_feedback):
+    """Source-then-target (or vice versa): feedback ends incorporated exactly
+    once, and BOTH categories end up bumped exactly one version each (neither
+    edit clobbers/reverts the other)."""
+    fb_id = both_pending_feedback["feedback"]
+    auth_client.post(f"/api/v1/feedback/{fb_id}/approve", json={"kind": "source"})
+    result = auth_client.post(f"/api/v1/feedback/{fb_id}/approve").json()
+    assert result["feedback"]["status"] == "incorporated"
+
+    db_session.expire_all()
+    school = db_session.get(Category, both_pending_feedback["school"])
+    ads = db_session.get(Category, both_pending_feedback["ads"])
+    assert school.criteria_version == 2
+    assert "Peachjar" in school.criteria_md
+    assert ads.criteria_version == 2
+    assert "Peachjar" in ads.criteria_md
+
+    fb = db_session.get(Feedback, fb_id)
+    assert fb.status == "incorporated"
+    # incorporated exactly once — resolved_at set, no double-processing artifacts
+    assert fb.resolved_at is not None
+
+
+@respx.mock
+def test_approve_target_resets_stale_source_proposal_same_category(
+        auth_client, db_session):
+    """Overwrite-prevention fix: category X (Ads) has a pending TARGET
+    proposal (feedback A: -> Ads) and, independently, a pending SOURCE
+    proposal targeting Ads too (feedback B: Ads -> Personal, i.e. Ads is B's
+    *source* category). Approving A's target proposal for Ads must reset B's
+    stale source proposal rather than let it silently overwrite Ads' new
+    criteria if approved later."""
+    ads = Category(name="Ads", criteria_md="Promotional and marketing email.")
+    personal = Category(name="Personal", criteria_md="Personal correspondence.")
+    db_session.add_all([ads, personal])
+    db_session.flush()
+
+    email_a = Email(gmail_message_id="collideA", sender="shop@a.com",
+                    subject="Deal", snippet="deal", status="classified",
+                    classification_id=None, confidence=0.5, rationale="r",
+                    received_at=datetime.now(UTC))
+    email_b = Email(gmail_message_id="collideB", sender="shop@b.com",
+                    subject="Newsletter", snippet="news", status="classified",
+                    classification_id=ads.id, confidence=0.5, rationale="r",
+                    received_at=datetime.now(UTC))
+    db_session.add_all([email_a, email_b])
+    db_session.commit()
+
+    fb_a = auth_client.post(f"/api/v1/emails/{email_a.id}/feedback", json={
+        "correct_category_id": ads.id}).json()
+    fb_b = auth_client.post(f"/api/v1/emails/{email_b.id}/feedback", json={
+        "correct_category_id": personal.id}).json()
+
+    respx.post(CHAT_URL).mock(return_value=proposal_response(
+        criteria="Promotional and marketing email, broadened.",
+        explanation="Broadened Ads."))
+    auth_client.post(f"/api/v1/feedback/{fb_a['id']}/generate-proposal")
+
+    respx.post(CHAT_URL).mock(return_value=exclusion_response(
+        criteria="Promotional and marketing email, excluding shop@b.com newsletters.",
+        explanation="Excluded shop@b.com."))
+    auth_client.post(f"/api/v1/feedback/{fb_b['id']}/generate-source-proposal")
+
+    db_session.expire_all()
+    fb_b_row = db_session.get(Feedback, fb_b["id"])
+    assert fb_b_row.proposal_source_status == "pending_review"
+
+    # Approve A's target proposal for Ads.
+    auth_client.post(f"/api/v1/feedback/{fb_a['id']}/approve")
+
+    db_session.expire_all()
+    ads_after = db_session.get(Category, ads.id)
+    assert ads_after.criteria_version == 2
+    assert "broadened" in ads_after.criteria_md
+
+    # B's stale source proposal for Ads must be reset, not left approvable.
+    fb_b_row = db_session.get(Feedback, fb_b["id"])
+    assert fb_b_row.proposal_source_status == "none"
+    assert fb_b_row.proposed_source_criteria_md is None
+    assert fb_b_row.proposal_source_explanation is None
+    assert fb_b_row.proposal_source_feedback_ids is None
+
+    # Regenerating B's source proposal reflects Ads' NEW criteria/version.
+    respx.post(CHAT_URL).mock(return_value=exclusion_response(
+        criteria="Promotional and marketing email, broadened, excluding shop@b.com.",
+        explanation="Excluded shop@b.com from broadened criteria."))
+    regen = auth_client.post(
+        f"/api/v1/feedback/{fb_b['id']}/generate-source-proposal").json()
+    assert regen["proposal_source_status"] == "pending_review"
+    assert "broadened" in regen["proposed_source_criteria_md"]
+
+
 @respx.mock
 def test_source_merged_into_shown_in_list(auth_client, db_session):
     """Two feedback rows sharing a source category are consolidated into one

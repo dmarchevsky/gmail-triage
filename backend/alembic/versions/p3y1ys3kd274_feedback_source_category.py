@@ -11,8 +11,14 @@ snapshotted at feedback creation so it persists even if the email is later
 reclassified.
 
 Backfills source_category_id on existing feedback rows by joining with emails
-where the feedback's correct_category_id differs from the email's classification_id,
-making existing feedback immediately eligible for source-exclusion proposal generation.
+where the feedback's correct_category_id differs from the email's classification_id.
+This backfill runs against ALL rows with such a conflict, regardless of status — it
+does not filter on `status == open`. Eligibility for source-exclusion proposal
+generation, however, is gated elsewhere (`open_feedback_for_source_category`, which
+only considers `status == open` rows). So this backfill only makes *still-open*
+historical feedback immediately eligible for source-exclusion proposals; rows already
+`incorporated` or `dismissed` get `source_category_id` populated for record-keeping
+but will NOT retroactively become eligible to generate a proposal.
 """
 
 import sqlalchemy as sa

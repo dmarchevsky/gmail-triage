@@ -132,6 +132,33 @@ def open_feedback_for_source_category(session: Session, category_id: int) -> lis
         .order_by(Feedback.created_at)))
 
 
+def _pending_target_proposals_for_category(session: Session,
+                                           category_id: int) -> list[Feedback]:
+    """Any feedback (regardless of `status`) currently holding a pending TARGET
+    proposal whose target category is `category_id`. Unlike
+    `open_feedback_for_category`, not filtered to open rows — used to find a
+    same-category proposal collision across kinds when approving the other
+    kind (see `approve_proposal`)."""
+    return list(session.scalars(
+        select(Feedback)
+        .outerjoin(Email, Email.id == Feedback.email_id)
+        .where(Feedback.proposal_status == ProposalStatus.pending_review.value,
+               or_(Feedback.correct_category_id == category_id,
+                   and_(Feedback.correct_category_id.is_(None),
+                        Email.classification_id == category_id)))))
+
+
+def _pending_source_proposals_for_category(session: Session,
+                                           category_id: int) -> list[Feedback]:
+    """Any feedback currently holding a pending SOURCE proposal whose source
+    category is `category_id`. Parallels
+    `_pending_target_proposals_for_category`."""
+    return list(session.scalars(
+        select(Feedback)
+        .where(Feedback.proposal_source_status == ProposalStatus.pending_review.value,
+               Feedback.source_category_id == category_id)))
+
+
 async def _build_email_blocks(session: Session, client: GmailClient | None,
                               included: list[Feedback], body_max: int) -> list[str]:
     """Render one prompt block per feedback's email (fetch body via Gmail,
@@ -303,12 +330,28 @@ def approve_proposal(session: Session, feedback: Feedback,
     """Approve a pending proposal, bump the edited category's criteria
     version, and record a CategoryCriteriaHistory row.
 
-    Asymmetry: only `kind == "target"` marks the covered Feedback rows
-    `incorporated` (and sets `resolved_at`). A `kind == "source"` approval
-    narrows the *losing* category's criteria — an independent category edit
-    — and must NOT mark feedback resolved, so a feedback with both a pending
-    target proposal and a pending source proposal isn't silently dropped
-    from the other queue once one side is approved.
+    A feedback row can carry a pending proposal of BOTH kinds at once (its
+    target proposal and its source/exclusion proposal), independently
+    reviewable. Resolution is deferred until both sides that exist for a row
+    are terminal (approved or rejected):
+      - `kind == "target"`: covered rows are marked `incorporated` UNLESS the
+        row still has a pending SOURCE proposal — that row is left `open` so
+        it stays reachable (e.g. for `/generate-source-proposal`) rather than
+        vanishing from the open-feedback queue with its source proposal
+        stranded.
+      - `kind == "source"`: never marks rows incorporated on its own (the
+        source edit narrows the *losing* category — an independent edit from
+        the target side) EXCEPT it completes the resolution deferred above:
+        for each covered row whose target proposal was already `approved`,
+        it now marks the row `incorporated` / sets `resolved_at`.
+
+    Cross-kind collision: a category can simultaneously be the subject of a
+    pending TARGET proposal (from one feedback) and a pending SOURCE
+    proposal (from another) — both generated against the same starting
+    criteria_md/version. Approving one would let the other's stale text
+    silently clobber this edit if later approved, so approving either kind
+    resets any pending proposal of the OTHER kind still targeting this same
+    category back to `none` — it must be regenerated against the new text.
     """
     if kind == "source":
         category_id = feedback.source_category_id
@@ -330,8 +373,28 @@ def approve_proposal(session: Session, feedback: Feedback,
     if not new_criteria:
         raise ValueError("No proposed criteria to approve")
 
-    # Every feedback this consolidated proposal covers is incorporated at once.
+    # Every feedback this consolidated proposal covers is incorporated at once
+    # (subject to the deferral below when the other side is still pending).
     covered_ids = getattr(feedback, ids_attr) or [feedback.id]
+
+    # Cross-kind collision: reset any pending proposal of the OTHER kind still
+    # targeting this same category — it was generated against the criteria_md
+    # we're about to replace and would otherwise silently clobber this edit if
+    # approved later.
+    other_pending = (_pending_source_proposals_for_category(session, category.id)
+                     if kind == "target"
+                     else _pending_target_proposals_for_category(session, category.id))
+    for fb in other_pending:
+        if kind == "target":
+            fb.proposal_source_status = ProposalStatus.none.value
+            fb.proposed_source_criteria_md = None
+            fb.proposal_source_explanation = None
+            fb.proposal_source_feedback_ids = None
+        else:
+            fb.proposal_status = ProposalStatus.none.value
+            fb.proposed_criteria_md = None
+            fb.proposal_explanation = None
+            fb.proposal_feedback_ids = None
 
     category.criteria_md = new_criteria
     category.criteria_version += 1
@@ -340,11 +403,21 @@ def approve_proposal(session: Session, feedback: Feedback,
         criteria_md=new_criteria, source=CriteriaSource.llm_feedback.value,
         feedback_ids=covered_ids))
 
-    if kind == "target":
-        now = datetime.now(UTC)
-        for fb in session.scalars(select(Feedback).where(Feedback.id.in_(covered_ids))):
+    now = datetime.now(UTC)
+    for fb in session.scalars(select(Feedback).where(Feedback.id.in_(covered_ids))):
+        if kind == "target":
+            # Leave open if a source proposal is still pending review — resolve
+            # it once that side reaches a terminal state (see kind == "source"
+            # branch below).
+            if fb.proposal_source_status == ProposalStatus.pending_review.value:
+                continue
             fb.status = FeedbackStatus.incorporated.value
             fb.resolved_at = now
+        else:
+            # Completes a resolution deferred by a prior target approval.
+            if fb.proposal_status == ProposalStatus.approved.value:
+                fb.status = FeedbackStatus.incorporated.value
+                fb.resolved_at = now
     setattr(feedback, status_attr, ProposalStatus.approved.value)
     audit(session, "user",
           "criteria_proposal_approved" if kind == "target"
