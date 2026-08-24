@@ -1,34 +1,61 @@
 import { useCallback, useEffect, useState } from "react";
-import { Category, FeedbackItem, errMsg, get, post } from "../api";
+import {
+  Category,
+  FeedbackItem,
+  ProposalKind,
+  approveProposal,
+  errMsg,
+  get,
+  post,
+  rejectProposal,
+} from "../api";
 import { AsyncButton, Badge, DiffView, Modal, fmtDate } from "../components";
 import { useToast } from "../toast";
 
 function ProposalReview({
   item,
+  kind,
   categories,
   onDone,
   onClose,
 }: {
   item: FeedbackItem;
+  kind: ProposalKind;
   categories: Category[];
   onDone: () => void;
   onClose: () => void;
 }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
-  const [edited, setEdited] = useState(item.proposed_criteria_md ?? "");
+  const isSource = kind === "source";
+  const criteriaMd = isSource ? item.proposed_source_criteria_md : item.proposed_criteria_md;
+  const explanation = isSource ? item.proposal_source_explanation : item.proposal_explanation;
+  const coversCount = isSource ? item.source_covers_count : item.covers_count;
+  const [edited, setEdited] = useState(criteriaMd ?? "");
 
-  const targetCategory = categories.find(
+  const reviewedCategory = categories.find(
     (c) =>
       c.id ===
-      (item.correct_category_id ??
-        categories.find((x) => x.name === item.original_category)?.id),
+      (isSource
+        ? item.source_category_id
+        : (item.correct_category_id ??
+          categories.find((x) => x.name === item.original_category)?.id)),
   );
 
-  const act = async (path: string, body?: unknown) => {
+  const approve = async () => {
     try {
-      await post(`/feedback/${item.id}/${path}`, body);
-      toast.success(path === "reject" ? "Proposal rejected" : "Criteria updated");
+      await approveProposal(item.id, editing ? edited : undefined, kind);
+      toast.success("Criteria updated");
+      onDone();
+      onClose();
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
+  const reject = async () => {
+    try {
+      await rejectProposal(item.id, kind);
+      toast.success("Proposal rejected");
       onDone();
       onClose();
     } catch (e) {
@@ -37,7 +64,11 @@ function ProposalReview({
   };
 
   return (
-    <Modal title={`Proposal — ${targetCategory?.name ?? "?"}`} onClose={onClose} wide>
+    <Modal
+      title={`Proposal — ${reviewedCategory?.name ?? "?"} (${isSource ? "exclusion" : "inclusion"})`}
+      onClose={onClose}
+      wide
+    >
       <p className="sub">
         Email “{item.email_subject}” from {item.email_sender}: classified as{" "}
         <b>{item.original_category ?? "none"}</b>, should be{" "}
@@ -49,15 +80,21 @@ function ProposalReview({
           </>
         )}
       </p>
-      {(item.covers_count ?? 0) > 1 && (
+      {isSource && (
         <p className="note">
-          This consolidated proposal considers <b>{item.covers_count}</b> feedback
+          This revises <b>{item.source_category ?? "?"}</b>'s criteria to exclude mail
+          like this one, so it stops winning over the correct category.
+        </p>
+      )}
+      {(coversCount ?? 0) > 1 && (
+        <p className="note">
+          This consolidated proposal considers <b>{coversCount}</b> feedback
           items for this category — approving incorporates them all at once.
         </p>
       )}
-      {item.proposal_explanation && (
+      {explanation && (
         <p className="rationale">
-          <b>LLM explanation:</b> {item.proposal_explanation}
+          <b>LLM explanation:</b> {explanation}
         </p>
       )}
 
@@ -66,20 +103,20 @@ function ProposalReview({
         <textarea rows={12} value={edited} onChange={(e) => setEdited(e.target.value)} />
       ) : (
         <DiffView
-          oldText={targetCategory?.criteria_md ?? ""}
-          newText={item.proposed_criteria_md ?? ""}
+          oldText={reviewedCategory?.criteria_md ?? ""}
+          newText={criteriaMd ?? ""}
         />
       )}
       <div className="modal-actions">
-        <button onClick={() => act("reject")}>Reject</button>
+        <button onClick={reject}>Reject</button>
         {editing ? (
-          <button className="primary" onClick={() => act("approve", { criteria_md: edited })}>
+          <button className="primary" onClick={approve}>
             Approve edited version
           </button>
         ) : (
           <>
             <button onClick={() => setEditing(true)}>Edit then approve</button>
-            <button className="primary" onClick={() => act("approve")}>
+            <button className="primary" onClick={approve}>
               Approve
             </button>
           </>
@@ -92,7 +129,9 @@ function ProposalReview({
 export default function FeedbackQueue() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [reviewing, setReviewing] = useState<FeedbackItem | null>(null);
+  const [reviewing, setReviewing] = useState<{ item: FeedbackItem; kind: ProposalKind } | null>(
+    null,
+  );
   const toast = useToast();
 
   const load = useCallback(async () => {
@@ -156,12 +195,32 @@ export default function FeedbackQueue() {
                       ` · covers ${f.covers_count}`}
                   </Badge>
                 )}
+                {f.source_category && f.proposal_source_status !== "none" && (
+                  f.source_merged_into ? (
+                    <Badge tone="neutral">source fix merged</Badge>
+                  ) : (
+                    <Badge
+                      tone={
+                        f.proposal_source_status === "pending_review"
+                          ? "info"
+                          : f.proposal_source_status === "rejected"
+                            ? "error"
+                            : "neutral"
+                      }
+                    >
+                      Source fix: {f.proposal_source_status}
+                      {f.proposal_source_status === "pending_review" &&
+                        (f.source_covers_count ?? 0) > 1 &&
+                        ` · covers ${f.source_covers_count}`}
+                    </Badge>
+                  )
+                )}
               </td>
               <td className="row-actions">
                 {f.merged_into ? (
                   <span className="sub">in pending review</span>
                 ) : f.proposal_status === "pending_review" ? (
-                  <button className="primary" onClick={() => setReviewing(f)}>
+                  <button className="primary" onClick={() => setReviewing({ item: f, kind: "target" })}>
                     Review
                   </button>
                 ) : (
@@ -180,6 +239,29 @@ export default function FeedbackQueue() {
                   >
                     Generate now
                   </AsyncButton>
+                )}
+                {f.source_category && !f.source_merged_into && (
+                  f.proposal_source_status === "pending_review" ? (
+                    <button onClick={() => setReviewing({ item: f, kind: "source" })}>
+                      Review source fix
+                    </button>
+                  ) : f.proposal_source_status !== "approved" ? (
+                    <AsyncButton
+                      onClick={async () => {
+                        try {
+                          await post(`/feedback/${f.id}/generate-source-proposal`);
+                          toast.success("Source fix proposal generated");
+                        } catch (e) {
+                          toast.error(
+                            `Generation failed: ${e instanceof Error ? e.message : e}`,
+                          );
+                        }
+                        await load();
+                      }}
+                    >
+                      Generate source fix
+                    </AsyncButton>
+                  ) : null
                 )}
                 <AsyncButton
                   onClick={async () => {
@@ -205,7 +287,8 @@ export default function FeedbackQueue() {
 
       {reviewing && (
         <ProposalReview
-          item={reviewing}
+          item={reviewing.item}
+          kind={reviewing.kind}
           categories={categories}
           onDone={load}
           onClose={() => setReviewing(null)}

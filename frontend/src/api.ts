@@ -266,13 +266,34 @@ export interface FeedbackItem {
   original_category: string | null;
   correct_category_id: number | null;
   correct_category: string | null;
+  source_category_id: number | null;
+  source_category: string | null;
   user_note: string | null;
   status: string;
   proposed_criteria_md: string | null;
   proposal_explanation: string | null;
   proposal_status: string;
   proposal_feedback_ids: number[] | null;
+  proposed_source_criteria_md: string | null;
+  proposal_source_explanation: string | null;
+  proposal_source_status: string;
+  proposal_source_feedback_ids: number[] | null;
   merged_into: number | null;
   covers_count: number | null;
+  source_merged_into: number | null;
+  source_covers_count: number | null;
   created_at: string | null;
 }
+
+/** Which proposal a review/approve/reject action targets: the target category's
+ * inclusion criteria (default) or the source category's exclusion criteria. */
+export type ProposalKind = "target" | "source";
+
+export const approveProposal = (feedbackId: number, criteriaMd?: string, kind: ProposalKind = "target") =>
+  post<{ feedback: FeedbackItem; category_id: number; criteria_version: number }>(
+    `/feedback/${feedbackId}/approve`,
+    { criteria_md: criteriaMd, kind },
+  );
+
+export const rejectProposal = (feedbackId: number, kind: ProposalKind = "target") =>
+  post<FeedbackItem>(`/feedback/${feedbackId}/reject`, { kind });
