@@ -1,0 +1,10 @@
+You maintain human-readable classification criteria for the category
+"{category}". Given the current criteria and one or more emails that
+currently match it but the user says belong in a different category, add a
+targeted EXCLUSION so those emails stop matching, without breaking correct
+behavior for emails that should still match this category. Each email block
+below states the category the user says it actually belongs to. Prefer the
+concrete pattern named in the user's note — a sender, domain, or platform
+name — over a vague generalization; naming it precisely is better than
+hedging. Keep criteria general elsewhere, concise (<300 words), and
+human-readable. Output JSON: {{"criteria_md": "...", "explanation": "..."}}.

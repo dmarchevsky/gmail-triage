@@ -7,7 +7,8 @@ from datetime import UTC, datetime
 import pytest
 import respx
 
-from app.models import Category, Email
+from app.models import Category, CategoryCriteriaHistory, Email, Feedback
+from app.services import feedback_service
 from tests.test_m2_classification import CHAT_URL, llm_response
 
 
@@ -256,3 +257,95 @@ def test_new_feedback_regenerates_to_include_it(auth_client, db_session,
     listed = auth_client.get("/api/v1/feedback?status=open").json()
     pending = [f for f in listed if f["proposal_status"] == "pending_review"]
     assert len(pending) == 1 and pending[0]["id"] == fb2["id"]
+
+
+def exclusion_response(criteria="School criteria, excluding Peachjar flyer notifications.",
+                       explanation="Excluded Peachjar."):
+    return llm_response({"criteria_md": criteria, "explanation": explanation})
+
+
+@pytest.fixture()
+def peachjar_source_feedback(db_session):
+    """An email wrongly classified as 'School'; the user corrects it to 'Ads'
+    and names Peachjar as the concrete cause. `source_category_id` is set
+    directly on the DB row here — the route layer doesn't wire this up until
+    a later task, per the brief."""
+    school = Category(name="School", criteria_md="School announcements and forms.")
+    ads = Category(name="Ads", criteria_md="Promotional and marketing email.")
+    db_session.add_all([school, ads])
+    db_session.flush()
+    email = Email(gmail_message_id="p1", sender="noreply@peachjar.com",
+                  subject="New flyer from your school", snippet="Check out this flyer",
+                  status="classified", classification_id=school.id,
+                  confidence=0.65, rationale="Mentions school.",
+                  received_at=datetime.now(UTC))
+    db_session.add(email)
+    db_session.flush()
+    fb = Feedback(email_id=email.id, correct_category_id=ads.id,
+                  source_category_id=school.id,
+                  user_note="This is peachjar, an ad platform. peachjar again.")
+    db_session.add(fb)
+    db_session.commit()
+    return {"school": school.id, "ads": ads.id, "email": email.id, "feedback": fb.id}
+
+
+@respx.mock
+async def test_exclusion_proposal_generation_mentions_concrete_pattern(
+        db_session, peachjar_source_feedback):
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    representative = await feedback_service.generate_exclusion_proposal_for_category(
+        db_session, peachjar_source_feedback["school"])
+    assert representative is not None
+    assert representative.proposal_source_status == "pending_review"
+    assert "Peachjar" in representative.proposed_source_criteria_md
+    assert representative.proposal_source_explanation == "Excluded Peachjar."
+    assert representative.proposal_source_feedback_ids == [
+        peachjar_source_feedback["feedback"]]
+
+
+@respx.mock
+async def test_approve_source_proposal_bumps_source_category_leaves_feedback_open(
+        db_session, peachjar_source_feedback):
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    representative = await feedback_service.generate_exclusion_proposal_for_category(
+        db_session, peachjar_source_feedback["school"])
+
+    category = feedback_service.approve_proposal(
+        db_session, representative, kind="source")
+    assert category.id == peachjar_source_feedback["school"]
+    assert category.criteria_version == 2
+    assert "Peachjar" in category.criteria_md
+
+    db_session.expire_all()
+    school = db_session.get(Category, peachjar_source_feedback["school"])
+    assert school.criteria_version == 2
+
+    history = db_session.query(CategoryCriteriaHistory).filter_by(
+        category_id=peachjar_source_feedback["school"]).all()
+    assert len(history) == 1
+    assert history[0].version == 2
+    assert history[0].source == "llm_feedback"
+    assert history[0].feedback_ids == [peachjar_source_feedback["feedback"]]
+
+    fb = db_session.get(Feedback, peachjar_source_feedback["feedback"])
+    assert fb.status == "open"          # only target approval resolves feedback
+    assert fb.proposal_source_status == "approved"
+
+
+@respx.mock
+async def test_reject_source_proposal_leaves_criteria_untouched(
+        db_session, peachjar_source_feedback):
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    representative = await feedback_service.generate_exclusion_proposal_for_category(
+        db_session, peachjar_source_feedback["school"])
+
+    feedback_service.reject_proposal(db_session, representative, kind="source")
+
+    db_session.expire_all()
+    school = db_session.get(Category, peachjar_source_feedback["school"])
+    assert school.criteria_md == "School announcements and forms."
+    assert school.criteria_version == 1
+
+    fb = db_session.get(Feedback, peachjar_source_feedback["feedback"])
+    assert fb.proposal_source_status == "rejected"
+    assert fb.status == "open"
