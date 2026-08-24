@@ -970,6 +970,16 @@ label.checkbox input {
   padding: 0.5rem 0.75rem;
 }
 
+.proposal-section {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.proposal-section h4 {
+  margin: 0 0 0.5rem;
+}
+
 .action-summary {
   display: flex;
   flex-wrap: wrap;
