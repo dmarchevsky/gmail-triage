@@ -349,3 +349,122 @@ async def test_reject_source_proposal_leaves_criteria_untouched(
     fb = db_session.get(Feedback, peachjar_source_feedback["feedback"])
     assert fb.proposal_source_status == "rejected"
     assert fb.status == "open"
+
+
+# --- Task 3: API routes wiring ---------------------------------------------
+
+
+def test_create_feedback_sets_source_category_id(auth_client, misclassified):
+    resp = auth_client.post(f"/api/v1/emails/{misclassified['email']}/feedback", json={
+        "correct_category_id": misclassified["receipts"]})
+    assert resp.status_code == 201
+    fb = resp.json()
+    assert fb["source_category_id"] == misclassified["market"]
+    assert fb["source_category"] == "MarketNews"
+
+
+def test_create_feedback_correct_none_leaves_source_category_unset(auth_client,
+                                                                    misclassified):
+    resp = auth_client.post(f"/api/v1/emails/{misclassified['email']}/feedback", json={
+        "correct_category_id": None})
+    fb = resp.json()
+    assert fb["source_category_id"] is None
+    assert fb["source_category"] is None
+
+
+def test_generate_source_proposal_400_without_source_category(auth_client, misclassified):
+    fb = auth_client.post(f"/api/v1/emails/{misclassified['email']}/feedback", json={
+        "correct_category_id": None}).json()
+    resp = auth_client.post(f"/api/v1/feedback/{fb['id']}/generate-source-proposal")
+    assert resp.status_code == 400
+
+
+@respx.mock
+def test_approve_source_via_route_leaves_feedback_open(auth_client, db_session,
+                                                        peachjar_source_feedback):
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/generate-source-proposal")
+
+    result = auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/approve",
+        json={"kind": "source"}).json()
+    assert result["criteria_version"] == 2
+    assert result["feedback"]["status"] == "open"                 # not incorporated
+    assert result["feedback"]["proposal_source_status"] == "approved"
+    assert result["feedback"]["proposal_status"] == "none"        # target side untouched
+
+    db_session.expire_all()
+    school = db_session.get(Category, peachjar_source_feedback["school"])
+    assert school.criteria_version == 2
+    assert "Peachjar" in school.criteria_md
+
+
+@respx.mock
+def test_reject_source_via_route_leaves_criteria_untouched(auth_client, db_session,
+                                                            peachjar_source_feedback):
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/generate-source-proposal")
+
+    result = auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/reject",
+        json={"kind": "source"}).json()
+    assert result["proposal_source_status"] == "rejected"
+    assert result["status"] == "open"
+
+    db_session.expire_all()
+    school = db_session.get(Category, peachjar_source_feedback["school"])
+    assert school.criteria_md == "School announcements and forms."
+    assert school.criteria_version == 1
+
+
+@respx.mock
+def test_approve_target_409_when_only_source_proposal_pending(auth_client,
+                                                               peachjar_source_feedback):
+    """kind defaults to 'target', so a pending SOURCE-only proposal must not
+    satisfy the approve/reject pending-review check for the default kind."""
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/generate-source-proposal")
+
+    assert auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/approve"
+    ).status_code == 409
+    assert auth_client.post(
+        f"/api/v1/feedback/{peachjar_source_feedback['feedback']}/reject"
+    ).status_code == 409
+
+
+@respx.mock
+def test_source_merged_into_shown_in_list(auth_client, db_session):
+    """Two feedback rows sharing a source category are consolidated into one
+    exclusion proposal; the non-representative row is marked via
+    `source_merged_into`, mirroring the existing target-side `merged_into`."""
+    school = Category(name="School", criteria_md="School announcements and forms.")
+    ads = Category(name="Ads", criteria_md="Promotional and marketing email.")
+    personal = Category(name="Personal", criteria_md="Personal correspondence.")
+    db_session.add_all([school, ads, personal])
+    db_session.flush()
+    e1 = Email(gmail_message_id="s1", sender="a@peachjar.com", subject="Flyer 1",
+              snippet="flyer", status="classified", classification_id=school.id,
+              confidence=0.6, rationale="r1", received_at=datetime.now(UTC))
+    e2 = Email(gmail_message_id="s2", sender="b@peachjar.com", subject="Flyer 2",
+              snippet="flyer2", status="classified", classification_id=school.id,
+              confidence=0.6, rationale="r2", received_at=datetime.now(UTC))
+    db_session.add_all([e1, e2])
+    db_session.commit()
+
+    fb1 = auth_client.post(f"/api/v1/emails/{e1.id}/feedback", json={
+        "correct_category_id": ads.id}).json()
+    fb2 = auth_client.post(f"/api/v1/emails/{e2.id}/feedback", json={
+        "correct_category_id": personal.id}).json()
+
+    respx.post(CHAT_URL).mock(return_value=exclusion_response())
+    auth_client.post(f"/api/v1/feedback/{fb1['id']}/generate-source-proposal")
+
+    listed = auth_client.get("/api/v1/feedback?status=open").json()
+    merged = next(f for f in listed if f["id"] == fb1["id"])
+    rep = next(f for f in listed if f["id"] == fb2["id"])
+    assert merged["source_merged_into"] == fb2["id"]
+    assert rep["source_covers_count"] == 2
