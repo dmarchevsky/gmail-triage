@@ -164,9 +164,6 @@ async def _summarize(session: Session, digest: Digest, emails: list[Email],
     return body[:synthesis_chars]
 
 
-_EXPANDABLE_MIN_CHARS = 350
-
-
 def _normalize_summary(text: str) -> str:
     """Strip trailing spaces per line and collapse runs of blank lines."""
     out: list[str] = []
@@ -177,9 +174,12 @@ def _normalize_summary(text: str) -> str:
     return "\n".join(out)
 
 
-def _blockquote(inner_html: str) -> str:
-    """Wrap already-safe inner HTML in a blockquote; expandable when long."""
-    expandable = inner_html.count("\n") >= 4 or len(inner_html) > _EXPANDABLE_MIN_CHARS
+def _blockquote(inner_html: str, expandable: bool = False) -> str:
+    """Wrap already-safe inner HTML in a blockquote.
+
+    `expandable` (per-digest `collapsed_sections`) forces Telegram's collapsed
+    <blockquote expandable>; otherwise the section renders fully expanded.
+    """
     tag = "<blockquote expandable>" if expandable else "<blockquote>"
     return f"{tag}{inner_html}</blockquote>"
 
@@ -212,7 +212,7 @@ def _email_block(email: Email, digest: Digest, tz: ZoneInfo) -> str:
     if text:
         inner_lines.append(esc(text))
 
-    return _blockquote("\n".join(inner_lines))
+    return _blockquote("\n".join(inner_lines), digest.collapsed_sections)
 
 
 def _render_assemble_messages(digest: Digest, emails: list[Email],
@@ -252,7 +252,7 @@ def _render_assemble_messages(digest: Digest, emails: list[Email],
     return messages
 
 
-def _summary_body(summary: str) -> list[str]:
+def _summary_body(summary: str, expandable: bool = False) -> list[str]:
     """Bold TL;DR first line + blockquote for the rest (synthesize mode only).
     Returned strings are already-safe HTML."""
     esc = telegram.escape_html
@@ -262,7 +262,7 @@ def _summary_body(summary: str) -> list[str]:
     if first:
         parts.append(f"<b>{esc(first)}</b>")
     if rest.strip():
-        parts.append(_blockquote(esc(rest)))
+        parts.append(_blockquote(esc(rest), expandable))
     return parts
 
 
@@ -280,7 +280,7 @@ def _render_message(digest: Digest, emails: list[Email], summary: str,
     parts.append(
         f"📬 <b>{esc(digest.name)}</b> · {date_str}\n"
         f"<b>{len(emails)}</b> new email(s)")
-    parts.extend(_summary_body(summary))
+    parts.extend(_summary_body(summary, digest.collapsed_sections))
     return "\n\n".join(parts)
 
 

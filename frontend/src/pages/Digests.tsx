@@ -26,6 +26,7 @@ interface DigestForm {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
+  collapsed_sections: boolean;
   mode: "assemble" | "synthesize";
   email_threshold: number | "";
 }
@@ -55,6 +56,7 @@ function DigestEditor({
     include_metadata: digest?.include_metadata ?? true,
     max_emails: digest?.max_emails ?? 50,
     send_no_news: digest?.send_no_news ?? false,
+    collapsed_sections: digest?.collapsed_sections ?? false,
     mode: digest?.mode ?? "assemble",
     email_threshold: digest?.email_threshold ?? "",
   });
@@ -198,6 +200,14 @@ function DigestEditor({
             onChange={(e) => setForm({ ...form, send_no_news: e.target.checked })}
           />
           Send a "no news" message when empty (default: skip silently)
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={form.collapsed_sections}
+            onChange={(e) => setForm({ ...form, collapsed_sections: e.target.checked })}
+          />
+          Collapse sections in Telegram (expandable blockquotes)
         </label>
         <label className="checkbox">
           <input
@@ -410,6 +420,7 @@ export default function Digests() {
                       include_metadata: d.include_metadata,
                       max_emails: d.max_emails,
                       send_no_news: d.send_no_news,
+                      collapsed_sections: d.collapsed_sections,
                       mode: d.mode,
                       email_threshold: d.email_threshold,
                     });

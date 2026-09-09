@@ -634,29 +634,51 @@ def test_render_message_synthesize_tldr_above_blockquote():
     assert "Ops: deploy ok." in after_bq
 
 
-def test_render_message_expandable_when_long():
+def test_render_message_expandable_when_collapsed_sections_on():
     from app.services.digests import _render_message
 
-    digest = Digest(name="News", timezone="UTC",
-                    include_metadata=False, include_links=False)
-    summary = "TL;DR.\n" + "\n".join(f"line {i}" for i in range(6))
+    digest = Digest(name="News", timezone="UTC", include_metadata=False,
+                    include_links=False, collapsed_sections=True)
+    summary = "TL;DR.\nshort rest."
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
     msg = _render_message(digest, [email], summary, dry_run_prefix=False)
     assert "<blockquote expandable>" in msg
 
 
-def test_render_message_short_blockquote_not_expandable():
+def test_render_message_not_expandable_when_collapsed_sections_off():
+    """collapsed_sections off => plain blockquote regardless of length."""
     from app.services.digests import _render_message
 
-    digest = Digest(name="News", timezone="UTC",
-                    include_metadata=False, include_links=False)
-    summary = "TL;DR.\nshort rest."
+    digest = Digest(name="News", timezone="UTC", include_metadata=False,
+                    include_links=False, collapsed_sections=False)
+    summary = "TL;DR.\n" + "\n".join(f"line {i}" for i in range(6))
     email = Email(gmail_message_id="m9", sender="a@x.com", subject="s",
                   received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
     msg = _render_message(digest, [email], summary, dry_run_prefix=False)
     assert "<blockquote>" in msg
     assert "expandable" not in msg
+
+
+def test_render_assemble_collapsed_sections_forces_expandable():
+    """collapsed_sections toggles <blockquote expandable> on per-email blocks."""
+    from zoneinfo import ZoneInfo
+
+    from app.services.digests import _render_assemble_messages
+
+    tz = ZoneInfo("UTC")
+    email = Email(gmail_message_id="m9", sender="a@x.com", subject="Hello",
+                  summary="short", received_at=datetime(2026, 6, 12, 9, 5, tzinfo=UTC))
+
+    on = Digest(name="News", timezone="UTC", collapsed_sections=True)
+    off = Digest(name="News", timezone="UTC", collapsed_sections=False)
+
+    msg_on = _render_assemble_messages(on, [email], dry_run_prefix=False, tz=tz)[0]
+    msg_off = _render_assemble_messages(off, [email], dry_run_prefix=False, tz=tz)[0]
+
+    assert "<blockquote expandable>" in msg_on
+    assert "<blockquote>" in msg_off
+    assert "expandable" not in msg_off
 
 
 def test_strip_summary_html():

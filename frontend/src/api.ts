@@ -237,6 +237,7 @@ export interface Digest {
   include_metadata: boolean;
   max_emails: number;
   send_no_news: boolean;
+  collapsed_sections: boolean;
   mode: "assemble" | "synthesize";
   email_threshold: number | null;
   last_run: DigestLastRun | null;
