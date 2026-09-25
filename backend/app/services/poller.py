@@ -8,7 +8,10 @@ Runs as an asyncio task started from the app lifespan. Each cycle:
 - fetch metadata for new message ids, persist idempotently (unique
   gmail_message_id); ingest messages whose Gmail labels fall in the
   configured poll scope (poll_scope_labels: inbox + chosen category tabs),
-  excluding Sent/Drafts/Spam/Trash/Chats and the user's own mail.
+  excluding Sent/Drafts/Spam/Trash/Chats and the user's own mail;
+- after an incremental sync, periodically sweep the last CATCHUP_WINDOW with
+  messages.list as a safety net for anything history reported but we could
+  not fetch (Gmail can 404 a just-announced message) or never reported.
 """
 
 import asyncio
@@ -47,6 +50,14 @@ WATCH_RENEW_BEFORE = timedelta(hours=24)
 # In push mode the configured poll interval governs real-time (handled by wakes);
 # the loop itself only needs to poll occasionally as a catch-up safety net.
 PUSH_FALLBACK_POLL_SECONDS = 900
+# Gmail can announce a message in history.list before messages.get can serve it
+# (seen in push mode: 404 ~300 ms after the notification, fine minutes later).
+# Retry a 404 after these delays (seconds) before treating it as deleted.
+NOT_FOUND_RETRY_DELAYS: tuple[float, ...] = (2, 5, 10)
+# Catch-up sweep: re-list recent mail so nothing history missed is lost for good.
+CATCHUP_WINDOW = timedelta(hours=24)
+CATCHUP_SWEEP_INTERVAL = timedelta(minutes=15)
+_last_catchup_at: datetime | None = None
 # Telegram "reconnect Gmail" alert: send immediately on first failure, then at
 # most once per this interval while the auth error persists.
 AUTH_ALERT_COOLDOWN = timedelta(hours=24)
@@ -77,19 +88,36 @@ async def _persist_message(session: Session, client: GmailClient, message_id: st
     """Fetch + stage one new message into the session (no existence check, no
     commit — callers pre-filter known ids and commit per page). Returns True if
     a row was added."""
-    try:
-        msg = await client.get_message_metadata(message_id)
-    except GmailNotFound:
-        # Message was deleted/moved between the history record and this fetch.
-        # Skip it so one missing message can't abort (and stall) the whole poll.
+    msg = None
+    for delay in (*NOT_FOUND_RETRY_DELAYS, None):
+        try:
+            msg = await client.get_message_metadata(message_id)
+            break
+        except GmailNotFound:
+            if delay is None:
+                break
+            log.info("message_not_found_retry", gmail_message_id=message_id, delay=delay)
+            await asyncio.sleep(delay)
+    if msg is None:
+        # Still 404 after retries: deleted/moved since the history record (e.g. a
+        # draft autosave). Skip it so one missing message can't stall the poll;
+        # the catch-up sweep picks it up if it reappears within CATCHUP_WINDOW.
         log.info("message_gone_skipped", gmail_message_id=message_id)
         return False
     meta = gmail.parse_message_meta(msg)
     labels = set(meta.pop("label_ids"))
-    if labels & EXCLUDED_LABELS or not (labels & scope):
-        return False  # out of the configured scope (or Sent/Draft/Spam/Trash/Chat)
     sender_addr = meta["sender"].lower()
-    if any(own in sender_addr for own in own_addresses):
+    if labels & EXCLUDED_LABELS:
+        reason = "excluded"
+    elif not (labels & scope):
+        reason = "scope"
+    elif any(own in sender_addr for own in own_addresses):
+        reason = "own"
+    else:
+        reason = None
+    if reason:
+        log.info("message_skipped", gmail_message_id=message_id,
+                 label_ids=sorted(labels), reason=reason)
         return False
     session.add(Email(**meta, status=EmailStatus.pending.value, dry_run=False))
     log.info("email_ingested", gmail_message_id=message_id,
@@ -147,9 +175,12 @@ async def _incremental_sync(session: Session, client: GmailClient,
     while True:
         page = await client.list_history(start_history_id, page_token=page_token)
         latest_history_id = str(page.get("historyId", latest_history_id))
+        # History carries each message's labels at add time: drop drafts/sent/
+        # chats here so they cost no fetch (drafts also 404 once re-saved).
         ids = [added["message"]["id"]
                for record in page.get("history", [])
-               for added in record.get("messagesAdded", [])]
+               for added in record.get("messagesAdded", [])
+               if not set(added["message"].get("labelIds", [])) & EXCLUDED_LABELS]
         new_count += await _ingest_new_ids(session, client, ids, own, scope)
         page_token = page.get("nextPageToken")
         if not page_token:
@@ -157,6 +188,42 @@ async def _incremental_sync(session: Session, client: GmailClient,
     client.auth_row.history_id = latest_history_id
     session.commit()
     return new_count
+
+
+async def _catchup_sweep(session: Session, client: GmailClient) -> int:
+    """Safety net: ingest any in-scope message from the last CATCHUP_WINDOW that
+    is not in the DB yet. Known ids are filtered with one IN-query per page, so a
+    healthy sweep costs a single messages.list call."""
+    after_ts = int((datetime.now(UTC) - CATCHUP_WINDOW).timestamp())
+    q = f"after:{after_ts} -in:sent -in:chats -in:drafts -in:spam -in:trash"
+    own = _own_addresses(session)
+    scope = _scope_labels(session)
+    new_count = 0
+    page_token = None
+    while True:
+        page = await client.list_messages(q=q, page_token=page_token)
+        ids = [ref["id"] for ref in page.get("messages", [])]
+        known = _existing_message_ids(session, ids)
+        for mid in ids:
+            if mid not in known and await _persist_message(session, client, mid, own, scope):
+                log.warning("catchup_ingested", gmail_message_id=mid)
+                new_count += 1
+        session.commit()
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            break
+    return new_count
+
+
+async def _maybe_catchup_sweep(session: Session, client: GmailClient) -> int:
+    """Run _catchup_sweep at most once per CATCHUP_SWEEP_INTERVAL (push mode
+    wakes the poller on every mailbox change)."""
+    global _last_catchup_at
+    now = datetime.now(UTC)
+    if _last_catchup_at is not None and now - _last_catchup_at < CATCHUP_SWEEP_INTERVAL:
+        return 0
+    _last_catchup_at = now
+    return await _catchup_sweep(session, client)
 
 
 async def _fallback_sync(session: Session, client: GmailClient) -> int:
@@ -194,6 +261,7 @@ async def poll_once(session: Session) -> dict:
             try:
                 new_count = await _incremental_sync(session, client,
                                                     client.auth_row.history_id)
+                new_count += await _maybe_catchup_sweep(session, client)
                 mode = "incremental"
             except GmailHistoryExpired:
                 log.info("history_expired_falling_back")

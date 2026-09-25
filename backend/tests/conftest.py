@@ -23,6 +23,14 @@ def client(tmp_path, monkeypatch):
     auth._login_attempts.clear()
     app_state.__dict__.update(AppState().__dict__)  # reset module-global state
 
+    # Poller: no real sleeps on 404 retries, and keep the catch-up sweep throttled
+    # off (tests that exercise it set _last_catchup_at back to None).
+    from datetime import UTC, datetime
+
+    from app.services import poller
+    monkeypatch.setattr(poller, "NOT_FOUND_RETRY_DELAYS", (0, 0, 0))
+    monkeypatch.setattr(poller, "_last_catchup_at", datetime.now(UTC))
+
     from fastapi.testclient import TestClient
 
     from app.main import create_app

@@ -403,6 +403,76 @@ def test_incremental_sync_skips_missing_message(auth_client, db_session, connect
 
 
 @respx.mock
+def test_incremental_sync_retries_transient_404(auth_client, db_session, connected):
+    """Gmail can 404 a message announced by history.list moments earlier; the
+    poller must retry and ingest it rather than skip it for good."""
+    connected.history_id = "100"
+    db_session.commit()
+    msg = gmail_message("late1")
+    respx.get(f"{gmail.GMAIL_API}/history").respond(200, json={
+        "historyId": "200",
+        "history": [{"messagesAdded": [{"message": {"id": "late1"}}]}]})
+    route = respx.get(f"{gmail.GMAIL_API}/messages/late1").mock(side_effect=[
+        httpx.Response(404, json={"error": "nf"}),
+        httpx.Response(404, json={"error": "nf"}),
+        httpx.Response(200, json=msg),
+    ])
+
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json() == {"mode": "incremental", "new_emails": 1}
+    assert route.call_count == 3
+    from app.models import Email
+    assert db_session.query(Email).one().gmail_message_id == "late1"
+
+
+@respx.mock
+def test_incremental_sync_skips_drafts_without_fetching(auth_client, db_session, connected):
+    connected.history_id = "100"
+    db_session.commit()
+    respx.get(f"{gmail.GMAIL_API}/history").respond(200, json={
+        "historyId": "200",
+        "history": [{"messagesAdded": [{"message": {"id": "d1", "labelIds": ["DRAFT"]}}]}]})
+    draft_route = respx.get(f"{gmail.GMAIL_API}/messages/d1").respond(404)
+
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json() == {"mode": "incremental", "new_emails": 0}
+    assert not draft_route.called
+
+
+@respx.mock
+def test_catchup_sweep_ingests_messages_history_missed(auth_client, db_session, connected,
+                                                       monkeypatch):
+    """The periodic sweep ingests recent in-scope mail missing from the DB, skips
+    known ids without fetching, and is throttled to CATCHUP_SWEEP_INTERVAL."""
+    from app.models import Email
+    from app.services import poller
+    monkeypatch.setattr(poller, "_last_catchup_at", None)
+    connected.history_id = "100"
+    db_session.add(Email(**{k: v for k, v in gmail.parse_message_meta(
+        gmail_message("known1")).items() if k != "label_ids"}, status="actioned"))
+    db_session.commit()
+
+    respx.get(f"{gmail.GMAIL_API}/history").respond(200, json={"historyId": "200"})
+    list_route = respx.get(f"{gmail.GMAIL_API}/messages").respond(200, json={
+        "messages": [{"id": "known1"}, {"id": "missed1"}]})
+    known_route = respx.get(f"{gmail.GMAIL_API}/messages/known1").respond(200)
+    mock_metadata(gmail_message("missed1"))
+
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json() == {"mode": "incremental", "new_emails": 1}
+    assert not known_route.called
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(str(list_route.calls[0].request.url)).query)
+    assert "-in:drafts" in q["q"][0]
+    db_session.expire_all()
+    assert {e.gmail_message_id for e in db_session.query(Email)} == {"known1", "missed1"}
+
+    # Within the interval the sweep does not run again.
+    resp = auth_client.post("/api/v1/poller/run-now")
+    assert resp.json() == {"mode": "incremental", "new_emails": 0}
+    assert list_route.call_count == 1
+
+
+@respx.mock
 def test_baseline_ingests_category_tab_without_inbox(auth_client, db_session, connected):
     """A Promotions email that skipped the inbox (CATEGORY_PROMOTIONS, no INBOX)
     is ingested under the default scope; an archived Primary one is not."""
