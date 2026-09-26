@@ -35,8 +35,9 @@ git clone <this repo> mailtriage && cd mailtriage
 cp .env.example .env
 # edit .env:
 #   APP_SECRET_KEY=$(openssl rand -hex 32)
-#   UI_PASSWORD=<choose a password>
 #   POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   CLOUDFLARE_TUNNEL_TOKEN / CF_ACCESS_*   # see docs/remote-access.md
+#   (or, for a local-only trial: DEV_AUTH=true and no COMPOSE_PROFILES)
 #   LLM_BASE_URL=http://host.docker.internal:8081/v1   # your llama.cpp
 docker compose up -d --build
 ```
@@ -46,7 +47,10 @@ the host; `docker compose exec postgres psql -U mailtriage` to inspect).
 Outside Docker (bare-metal dev), leave `DATABASE_URL` unset and the app uses
 a local SQLite file under `./data` instead.
 
-Open http://localhost:8080, log in with `UI_PASSWORD`, and follow the
+Open the app at its Cloudflare tunnel hostname (e.g. `https://mail.example.com`)
+and sign in with Google — the UI has no password of its own; see
+[docs/remote-access.md](docs/remote-access.md) for the tunnel + Access setup.
+With `DEV_AUTH=true` it is just http://localhost:8080. Then follow the
 first-run wizard: connect Gmail → test the LLM → create your first category.
 Rules start in dry-run mode until you disable it per-rule.
 
@@ -68,9 +72,10 @@ MailTriage needs OAuth client credentials so *you* authorize it against
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
    - Application type: **Web application**.
    - Name: `mailtriage`.
-   - Authorized redirect URIs: `http://localhost:8080/api/v1/gmail/oauth/callback`
-     (adjust host/port if you serve the UI elsewhere — must match the URL you
-     use in the browser).
+   - Authorized redirect URIs: `https://mail.example.com/api/v1/gmail/oauth/callback`
+     (your tunnel hostname; it must match the URL you use in the browser and
+     Settings → Notifications → *Public base URL*). For local development add
+     `http://localhost:8080/api/v1/gmail/oauth/callback` too.
    - Create → **Download JSON**.
 5. In the MailTriage wizard (or Settings → Gmail), paste the JSON file's
    contents and click **Connect Gmail**. Google will warn the app is
@@ -182,9 +187,8 @@ Ingestion mode** to **Push**. This uses Gmail `users.watch` to publish change
 notifications to a Google Cloud **Pub/Sub** topic, and a background **pull**
 consumer that wakes the poller as soon as mail arrives.
 
-It stays true to the trusted-LAN model: the consumer **pulls** over an outbound
-connection, so there is **no inbound endpoint** to expose and no public HTTPS /
-webhook to secure. Polling keeps running as a safety net, so a lapsed watch or a
+The consumer **pulls** over an outbound connection, so there is **no inbound
+webhook** to expose or to exempt from Cloudflare Access. Polling keeps running as a safety net, so a lapsed watch or a
 Pub/Sub hiccup can never drop mail (ingestion is idempotent). The watch
 auto-renews (Gmail expires it within 7 days).
 
@@ -275,12 +279,15 @@ The container talks to exactly:
 To firewall the container, restrict egress to those hosts (or set
 `HTTPS_PROXY` in the environment; httpx honors it).
 
-### Reverse proxy / TLS
+### Remote access (Cloudflare Tunnel + Access)
 
-The app serves plain HTTP on :8080 and is meant for a trusted LAN. For
-remote access put it behind a TLS reverse proxy (Caddy/Traefik/nginx) and
-keep the UI password. Session cookies are `HttpOnly` + `SameSite=Lax`;
-login is rate-limited.
+The app serves plain HTTP on `127.0.0.1:8080` only. Remote access goes through
+a `cloudflared` tunnel (the `cloudflared` compose service, enabled with
+`COMPOSE_PROFILES=tunnel`) behind a Cloudflare Access application that signs
+you in with Google. The app verifies the signed `Cf-Access-Jwt-Assertion` on
+every API request and allows only `CF_ACCESS_ALLOWED_EMAILS`; there is no app
+password or session cookie. Setup, break-glass and verification steps:
+[docs/remote-access.md](docs/remote-access.md).
 
 ### Troubleshooting
 
@@ -296,7 +303,7 @@ login is rate-limited.
 
 ```bash
 cd backend && uv venv .venv && uv pip install -p .venv/bin/python -e '.[dev]'
-APP_SECRET_KEY=dev-secret UI_PASSWORD=dev .venv/bin/uvicorn app.main:app --port 8080 --reload
+APP_SECRET_KEY=dev-secret DEV_AUTH=true .venv/bin/uvicorn app.main:app --port 8080 --reload
 cd frontend && npm install && npm run dev    # Vite dev server proxies /api
 .venv/bin/pytest                              # backend tests
 .venv/bin/ruff check .                        # lint

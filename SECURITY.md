@@ -23,8 +23,9 @@ Status: all items implemented and covered by tests where noted.
   Fernet-encrypted with a key derived from `APP_SECRET_KEY`
   (test: `test_secret_setting_encrypted_at_rest`,
   `test_oauth_flow_stores_encrypted_token`).
-- The app refuses to start with a missing/default `APP_SECRET_KEY` or
-  `UI_PASSWORD` (test: `test_refuses_default_secrets`).
+- The app refuses to start with a missing/default `APP_SECRET_KEY`, or without
+  a complete Cloudflare Access config (tests: `test_refuses_default_secrets`,
+  `test_validate_secrets_fails_closed`).
 - `GET /settings` returns only `*_configured` markers, never secret values
   (tests: `test_settings_export_never_contains_secrets`,
   `test_gmail_auth_endpoint_never_returns_token`). Audit log payloads
@@ -34,17 +35,29 @@ Status: all items implemented and covered by tests where noted.
 - Documented in README §6: Google OAuth/Gmail, `api.telegram.org`, and the
   configured LLM endpoint. Push ingestion mode additionally contacts
   `pubsub.googleapis.com` — **outbound pull only**, so push adds no inbound
-  endpoint and keeps the trusted-LAN model (no public HTTPS webhook to secure).
+  endpoint (no public webhook to secure or exempt from Cloudflare Access).
+  The Cloudflare Access key set (`https://<team>/cdn-cgi/access/certs`) is
+  fetched to verify sign-ins.
   Nothing else is contacted. `httpx` honors `HTTPS_PROXY` for users who route
   egress through a proxy.
 
 ## 4. UI/API auth — ✅
-- Mandatory password; no auth-less mode (startup refusal).
-- Session cookie `HttpOnly` + `SameSite=Lax`; HTTP Basic fallback for API
-  use; login rate-limited (5/min; test: `test_login_rate_limited`).
-- All `/api` endpoints require auth except `/status` (docker healthcheck),
-  which leaks no configuration (test: `test_status_endpoint_is_minimal`).
-- TLS is intentionally out of scope; use a reverse proxy (README §6).
+- Identity comes from Cloudflare Access (Google sign-in) in front of a
+  `cloudflared` tunnel; TLS terminates at Cloudflare. The port is published on
+  `127.0.0.1` only. Setup: [docs/remote-access.md](docs/remote-access.md).
+- Every `/api` request must carry a `Cf-Access-Jwt-Assertion` that verifies
+  against the team's JWKS (RS256, AUD, issuer, expiry) and whose `email` claim is
+  in `CF_ACCESS_ALLOWED_EMAILS`; the plain `Cf-Access-Authenticated-User-Email`
+  header is never trusted. A JWKS outage answers 503, not 403
+  (tests: `test_cf_access.py`).
+- Exempt: `/status` (docker healthcheck, leaks no configuration — test:
+  `test_status_endpoint_is_minimal`) and `/auth/session` (reports why a visitor
+  is refused).
+- No app password or session cookie; CSRF protection relies on the Access
+  cookie being `SameSite=Lax` + `HttpOnly` (set on the Access application) and
+  on the JSON-only API.
+- `DEV_AUTH=true` disables auth for local development; the app refuses to start
+  with it alongside any `CF_ACCESS_*` setting.
 
 ## 5. Prompt-injection containment — ✅
 - The LLM's only output channels are schema-constrained JSON

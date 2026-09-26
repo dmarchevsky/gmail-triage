@@ -12,15 +12,65 @@ export class ApiError extends Error {
 export const errMsg = (e: unknown): string =>
   e instanceof Error ? e.message : String(e);
 
+// Cloudflare Access sits in front of the app. When its session expires, API
+// calls are redirected to the Access login page (cross-origin), which fetch
+// cannot follow. Reload once so the top-level navigation re-authenticates; the
+// sessionStorage flag stops a reload loop if that doesn't help.
+const ACCESS_RELOAD_FLAG = "mailtriage.access-reload";
+
+function reloadForAccess(): void {
+  try {
+    if (sessionStorage.getItem(ACCESS_RELOAD_FLAG)) return;
+    sessionStorage.setItem(ACCESS_RELOAD_FLAG, "1");
+  } catch {
+    return; // storage unavailable: never risk a reload loop
+  }
+  window.location.reload();
+}
+
+function clearAccessReloadFlag(): void {
+  try {
+    sessionStorage.removeItem(ACCESS_RELOAD_FLAG);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const resp = await fetch(`/api/v1${path}`, {
+    headers: { "Content-Type": "application/json", ...options.headers },
+    credentials: "same-origin",
+    redirect: "manual", // the API never redirects; a redirect means Access expired
+    ...options,
+  });
+  const html = (resp.headers.get("content-type") ?? "").includes("text/html");
+  if (resp.type === "opaqueredirect" || html) {
+    reloadForAccess();
+    throw new ApiError(401, "Your sign-in has expired — reload the page to sign in again");
+  }
+  clearAccessReloadFlag();
+  return resp;
+}
+
+export interface SessionInfo {
+  authenticated: boolean;
+  email: string | null;
+  mode: "cf_access" | "dev";
+  logout_url: string | null;
+  detail?: string;
+}
+
+/** The session probe answers non-2xx with a full body (e.g. 403 not allowlisted). */
+export async function fetchSession(): Promise<{ status: number; info: SessionInfo }> {
+  const resp = await apiFetch("/auth/session");
+  return { status: resp.status, info: (await resp.json()) as SessionInfo };
+}
+
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const resp = await fetch(`/api/v1${path}`, {
-    headers: { "Content-Type": "application/json", ...options.headers },
-    credentials: "same-origin",
-    ...options,
-  });
+  const resp = await apiFetch(path, options);
   if (!resp.ok) {
     let detail = resp.statusText;
     try {
@@ -202,8 +252,6 @@ export interface Settings {
   gmail_ingest_mode: string;
   gmail_pubsub_topic: string;
   gmail_pubsub_subscription: string;
-  ui_password_hash_configured: boolean;
-  auth_disabled: boolean;
   ignore_senders: string[];
   poll_scope_labels: string[];
   poller_paused: boolean;

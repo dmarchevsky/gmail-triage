@@ -1,6 +1,6 @@
 """Typed access to the key/value `settings` table.
 
-Secrets (telegram bot token, gmail oauth client secret, ui password hash) are
+Secrets (telegram bot token, gmail oauth client secret) are
 Fernet-encrypted at rest and never returned by GET /settings.
 """
 
@@ -15,7 +15,6 @@ from app.models import Setting
 SECRET_KEYS = {
     "telegram_bot_token",
     "gmail_client_secret_json",
-    "ui_password_hash",
 }
 
 # Summarization depth → the setting key holding that depth's prompt.
@@ -107,9 +106,10 @@ DEFAULTS: dict[str, Any] = {
     "retention_days": 90,
     "telegram_bot_token": "",
     "telegram_default_chat_id": "",
-    # Reachable base URL (e.g. Tailscale https://host.tailnet.ts.net:8080) used
-    # only to build the Telegram "reconnect Gmail" link when auth breaks while
-    # you're away from the LAN. Optional; falls back to instructional text when unset.
+    # Public base URL the UI is served at (the Cloudflare tunnel hostname, e.g.
+    # https://mail.example.com). Used for the Gmail OAuth redirect URI, the
+    # Cloudflare Access logout return address, and the Telegram "reconnect Gmail"
+    # link. Optional; falls back to the request's own URL / instructional text.
     "public_base_url": "",
     "gmail_client_secret_json": "",
     # Ingestion mode. "poll" = periodic history sync only. "push" = Gmail
@@ -126,15 +126,7 @@ DEFAULTS: dict[str, Any] = {
                           "CATEGORY_UPDATES", "CATEGORY_FORUMS"],
     "poller_paused": False,
     "first_run_complete": False,
-    # Auth: managed only via the dedicated /auth endpoints (see update_settings
-    # guard below), never through the generic PUT /settings.
-    "auth_disabled": False,
-    "ui_password_hash": "",
 }
-
-# Settings that must not be changed through the generic PUT /settings — they go
-# through dedicated endpoints that enforce current-password checks / hashing.
-PROTECTED_KEYS = {"auth_disabled", "ui_password_hash"}
 
 
 def _encrypt(value: str) -> str:
@@ -186,8 +178,6 @@ def update_settings(session: Session, updates: dict[str, Any]) -> None:
     for key, value in updates.items():
         if key not in DEFAULTS:
             raise KeyError(f"Unknown setting: {key}")
-        if key in PROTECTED_KEYS:
-            raise KeyError(f"Setting must be changed via /auth endpoints: {key}")
         if key == "gmail_ingest_mode" and value not in ("poll", "push"):
             raise ValueError(f"gmail_ingest_mode must be 'poll' or 'push', got {value!r}")
         if key == "retention_days" and int(value) < 0:

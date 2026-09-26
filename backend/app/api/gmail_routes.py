@@ -1,5 +1,7 @@
 """Gmail OAuth + connection management endpoints."""
 
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -17,8 +19,18 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/gmail")
 
 
-def _redirect_uri(request: Request) -> str:
-    return str(request.base_url).rstrip("/") + "/api/v1/gmail/oauth/callback"
+def _redirect_uri(request: Request, session: Session) -> str:
+    """The OAuth callback URL, which must match one registered on the Google client.
+
+    Behind the Cloudflare tunnel the request reaches uvicorn as plain http, so
+    when the browser is on the configured public host use `public_base_url`
+    (https) rather than the request's own URL.
+    """
+    base = str(request.base_url).rstrip("/")
+    public = (settings_service.get_setting(session, "public_base_url") or "").rstrip("/")
+    if public and urlsplit(public).hostname == request.url.hostname:
+        base = public
+    return base + "/api/v1/gmail/oauth/callback"
 
 
 class OAuthStartBody(BaseModel):
@@ -41,7 +53,7 @@ def oauth_start(body: OAuthStartBody, request: Request,
     # the Pub/Sub subscription (no separate service-account secret).
     push_mode = settings_service.get_setting(session, "gmail_ingest_mode") == "push"
     try:
-        url = gmail.build_auth_url(client_secret, _redirect_uri(request),
+        url = gmail.build_auth_url(client_secret, _redirect_uri(request, session),
                                    include_pubsub=push_mode)
     except gmail.GmailError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -61,7 +73,7 @@ async def oauth_callback(request: Request, session: Session = Depends(get_sessio
     if not client_secret:
         raise HTTPException(status_code=400, detail="OAuth client credentials missing")
     try:
-        token = await gmail.exchange_code(client_secret, code, _redirect_uri(request))
+        token = await gmail.exchange_code(client_secret, code, _redirect_uri(request, session))
         gmail.save_token(session, token)  # asserts no send-capable scope
         session.commit()
         client = gmail.GmailClient(session, client_secret)

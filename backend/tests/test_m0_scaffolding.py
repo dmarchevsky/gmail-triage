@@ -16,7 +16,7 @@ def test_api_requires_auth(client):
     assert client.get("/api/v1/settings").status_code == 401
 
 
-def test_login_and_settings_roundtrip(auth_client):
+def test_settings_roundtrip(auth_client):
     resp = auth_client.get("/api/v1/settings")
     assert resp.status_code == 200
     settings = resp.json()
@@ -37,12 +37,12 @@ def test_public_base_url_setting_roundtrips_unredacted(auth_client):
     assert resp.json()["public_base_url"] == ""
 
     resp = auth_client.put("/api/v1/settings",
-                           json={"public_base_url": "https://host.ts.net:8080"})
+                           json={"public_base_url": "https://mail.example.com"})
     assert resp.status_code == 200
-    assert resp.json()["public_base_url"] == "https://host.ts.net:8080"
+    assert resp.json()["public_base_url"] == "https://mail.example.com"
 
     resp = auth_client.get("/api/v1/settings")
-    assert resp.json()["public_base_url"] == "https://host.ts.net:8080"
+    assert resp.json()["public_base_url"] == "https://mail.example.com"
 
 
 def test_unknown_setting_rejected(auth_client):
@@ -65,29 +65,15 @@ def test_secret_setting_encrypted_at_rest(auth_client, db_session):
     assert "telegram_bot_token" not in settings
 
 
-def test_basic_auth_fallback(client):
-    import base64
-
-    header = "Basic " + base64.b64encode(b"user:test-password").decode()
-    resp = client.get("/api/v1/settings", headers={"Authorization": header})
-    assert resp.status_code == 200
-
-
-def test_wrong_password_rejected(client):
-    resp = client.post("/api/v1/auth/login", json={"password": "wrong"})
-    assert resp.status_code == 401
-
-
 def test_refuses_default_secrets(monkeypatch):
     from app.config import AppConfig
 
-    cfg = AppConfig(app_secret_key="changeme", ui_password="x")
+    access = {"cf_access_team_domain": "t.cloudflareaccess.com", "cf_access_aud": "aud",
+              "cf_access_allowed_emails": "me@example.com"}
+    cfg = AppConfig(app_secret_key="changeme", **access)
     with pytest.raises(RuntimeError, match="APP_SECRET_KEY"):
         cfg.validate_secrets()
-    cfg = AppConfig(app_secret_key="strong-key", ui_password="")
-    with pytest.raises(RuntimeError, match="UI_PASSWORD"):
-        cfg.validate_secrets()
-
+    AppConfig(app_secret_key="strong-key", **access).validate_secrets()
 
 
 def test_status_exposes_classifier_state(client, db_session):

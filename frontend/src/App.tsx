@@ -18,7 +18,7 @@ import {
   Tag,
   Tags,
 } from "lucide-react";
-import { ApiError, Settings, StatusResponse, get, post } from "./api";
+import { ApiError, SessionInfo, Settings, StatusResponse, fetchSession, get } from "./api";
 import { ToastProvider, useToast } from "./toast";
 import Dashboard from "./pages/Dashboard";
 import Emails from "./pages/Emails";
@@ -33,48 +33,54 @@ import Wizard from "./pages/Wizard";
 interface AppContextValue {
   status: StatusResponse | null;
   settings: Settings | null;
+  session: SessionInfo | null;
   refresh: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue>({
   status: null,
   settings: null,
+  session: null,
   refresh: async () => {},
 });
 
 export const useApp = () => useContext(AppContext);
 
-function Login({ onLogin }: { onLogin: () => void }) {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+type SessionState =
+  | { kind: "loading" }
+  | { kind: "ok"; info: SessionInfo }
+  | { kind: "denied"; status: number; info: SessionInfo | null };
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      await post("/auth/login", { password });
-      onLogin();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed");
-    }
-  };
-
+/** Shown when Cloudflare Access let the browser through but the app won't. */
+function AccessDenied({ status, info }: { status: number; info: SessionInfo | null }) {
+  let message: string;
+  if (status === 403) {
+    message = info?.detail ?? "This Google account is not allowed to use MailTriage.";
+  } else if (status === 503) {
+    message =
+      "MailTriage can't reach Cloudflare to check your sign-in right now. " +
+      "This is a server-side problem — try again shortly.";
+  } else if (status === 0) {
+    message = "Can't reach MailTriage. Check your connection and try again.";
+  } else {
+    message =
+      "You are not signed in through Cloudflare Access. Open MailTriage at its " +
+      "public address to sign in with Google.";
+  }
   return (
     <div className="login-page">
-      <form onSubmit={submit} className="login-form">
+      <div className="login-form">
         <h1>MailTriage</h1>
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-        />
-        <button type="submit" className="primary">
-          Log in
+        <p className="error">{message}</p>
+        <button className="primary" onClick={() => window.location.reload()}>
+          Try again
         </button>
-        {error && <p className="error">{error}</p>}
-      </form>
+        {status === 403 && info?.logout_url && (
+          <button onClick={() => (window.location.href = info.logout_url!)}>
+            Sign in with a different Google account
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -278,7 +284,8 @@ function Shell() {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [session, setSession] = useState<SessionState>({ kind: "loading" });
+  const authed = session.kind === "ok";
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
 
@@ -298,9 +305,13 @@ export default function App() {
   }, [refreshStatus]);
 
   useEffect(() => {
-    get<{ authenticated: boolean }>("/auth/session")
-      .then((s) => setAuthed(s.authenticated))
-      .catch(() => setAuthed(false));
+    fetchSession()
+      .then(({ status, info }) =>
+        setSession(info.authenticated ? { kind: "ok", info } : { kind: "denied", status, info }),
+      )
+      .catch((e) =>
+        setSession({ kind: "denied", status: e instanceof ApiError ? e.status : 0, info: null }),
+      );
   }, []);
 
   useEffect(() => {
@@ -310,11 +321,12 @@ export default function App() {
     return () => clearInterval(id);
   }, [authed, refresh, refreshStatus]);
 
-  if (authed === null) return <p className="center-note">Loading…</p>;
-  if (!authed) return <Login onLogin={() => setAuthed(true)} />;
+  if (session.kind === "loading") return <p className="center-note">Loading…</p>;
+  if (session.kind === "denied")
+    return <AccessDenied status={session.status} info={session.info} />;
 
   return (
-    <AppContext.Provider value={{ status, settings, refresh }}>
+    <AppContext.Provider value={{ status, settings, session: session.info, refresh }}>
       <ToastProvider>
         <HashRouter>
           <Shell />

@@ -14,7 +14,7 @@ MailTriage is a self-hosted application that polls a single Gmail account, class
 1. **Read-and-organize only.** The application MUST NOT compose, draft, send, reply to, or forward email under any circumstances. No code path may call Gmail send/draft/insert/import endpoints. The OAuth scope must not permit sending (see §6.1).
 2. **No permanent deletion.** The "delete" action moves messages to Trash (`messages.trash`). The Gmail `delete` endpoint (permanent) MUST NOT be used.
 3. **Local-only LLM data flow.** Email content is sent only to the configured llama.cpp endpoint. No cloud LLM fallback. Telegram receives only LLM-generated digest text and minimal metadata (subject, sender, date) — configurable down to summary-only.
-4. **Single-user, LAN-deployed.** No multi-tenancy. The web UI is assumed to be reachable only on a trusted network / behind a reverse proxy; still apply basic auth hardening (§6.4).
+4. **Single-user, self-hosted.** No multi-tenancy. The web UI is published through a Cloudflare Tunnel behind Cloudflare Access (Google sign-in); the app verifies the Access JWT itself (§6.4).
 
 ### 1.2 Out of scope (v1)
 
@@ -224,16 +224,16 @@ GET    /audit-log?filters…
 POST   /llm/test, POST /telegram/test
 ```
 
-Auth: all endpoints behind session or HTTP Basic (single user/password from env or settings; see §6.4). CORS locked to same origin.
+Auth: all endpoints behind a verified Cloudflare Access JWT whose email is allowlisted (see §6.4). CORS locked to same origin.
 
 ---
 
 ## 6. Security requirements
 
 1. **OAuth scope minimization:** request only `gmail.modify`. Assert at startup that the stored token's granted scopes contain no send-capable scope; refuse to run otherwise. (gmail.modify cannot send mail; sending requires gmail.send/gmail.compose/mail.google.com — never request these.)
-2. **Secrets at rest:** Gmail token, Telegram bot token, UI password hash stored in DB encrypted with a key from env (`APP_SECRET_KEY`, required, refuse to start with a default). Fernet (cryptography lib) is sufficient. Secrets never returned by GET /settings (write-only fields; UI shows "configured ✓").
+2. **Secrets at rest:** Gmail token, Telegram bot token, OAuth client JSON stored in DB encrypted with a key from env (`APP_SECRET_KEY`, required, refuse to start with a default). Fernet (cryptography lib) is sufficient. Secrets never returned by GET /settings (write-only fields; UI shows "configured ✓").
 3. **Egress surface:** documented and minimal — `googleapis.com`, `accounts.google.com`, `api.telegram.org`, and the LLM endpoint. Provide an optional compose example with an egress-restricting network or env-set proxy for users who firewall containers.
-4. **UI/API auth:** mandatory password (no auth-less mode); rate-limit login; session cookie `HttpOnly` + `SameSite=Lax`. Recommend reverse proxy + TLS in docs; do not implement TLS in-app.
+4. **UI/API auth:** Cloudflare Access (Google) in front of a `cloudflared` tunnel; the app verifies `Cf-Access-Jwt-Assertion` against the team JWKS and allowlists the `email` claim (`CF_ACCESS_ALLOWED_EMAILS`). Refuse to start without that config unless `DEV_AUTH` (local dev only) is set. TLS terminates at Cloudflare; the app port is loopback-only.
 5. **Prompt-injection containment:** email content is untrusted input inside prompts. Mitigations: (a) the LLM's only output channel is a constrained JSON schema (category/confidence/rationale) or digest text — it has no tools and cannot trigger actions directly; (b) system prompt instructs to ignore instructions inside emails; (c) rationale/digest text rendered in UI must be HTML-escaped; digest text HTML-escaped before Telegram; (d) actions derive solely from the rule engine over the schema-validated category — never from free text.
 6. **No body retention by default** (§3); logs must not contain full bodies (snippet max 200 chars in logs).
 7. **Container hardening:** non-root user, read-only root FS where feasible, named volumes for DB and token store, healthchecks, `restart: unless-stopped`.

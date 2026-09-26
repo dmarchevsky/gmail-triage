@@ -384,154 +384,44 @@ export function GmailConnect({
   );
 }
 
-function AuthSection({
-  settings,
-  onChange,
-}: {
-  settings: Settings;
-  onChange: () => Promise<void> | void;
-}) {
+function AccessSection() {
+  const { session } = useApp();
   const toast = useToast();
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [disablePw, setDisablePw] = useState("");
-  const [confirmingDisable, setConfirmingDisable] = useState(false);
-  const authActive = !settings.auth_disabled;
-
-  const changePassword = async () => {
-    if (!next.trim()) {
-      toast.error("New password must not be empty");
-      return;
-    }
-    if (next !== confirm) {
-      toast.error("New passwords do not match");
-      return;
-    }
+  const signOut = async () => {
     try {
-      await put("/auth/password", { current_password: current, new_password: next });
-      toast.success("Password changed");
-      setCurrent("");
-      setNext("");
-      setConfirm("");
-      await onChange();
+      const r = await post<{ logout_url: string | null }>("/auth/logout");
+      if (r.logout_url) window.location.href = r.logout_url;
     } catch (e) {
       toast.error(errMsg(e));
     }
   };
-
-  const enableAuth = async () => {
-    try {
-      await post("/auth/enable");
-      toast.success("Password authentication enabled");
-      await onChange();
-    } catch (e) {
-      toast.error(errMsg(e));
-    }
-  };
-
+  const dev = session?.mode === "dev";
   return (
     <div className="settings-section">
       <h3>
         Authentication{" "}
-        {authActive ? (
-          <Badge tone="ok">password required</Badge>
+        {dev ? (
+          <Badge tone="warn">disabled (DEV_AUTH)</Badge>
         ) : (
-          <Badge tone="warn">password disabled</Badge>
+          <Badge tone="ok">Cloudflare Access</Badge>
         )}
       </h3>
-      {authActive ? (
-        <>
-          <p className="sub">
-            Change the web UI password. Stored encrypted in the database — no restart
-            needed. {settings.ui_password_hash_configured
-              ? "A custom password is set."
-              : "Currently using the UI_PASSWORD from the environment."}
-          </p>
-          <div className="form-grid">
-            <label>
-              Current password
-              <input
-                type="password"
-                value={current}
-                onChange={(e) => setCurrent(e.target.value)}
-              />
-            </label>
-            <span />
-            <label>
-              New password
-              <input
-                type="password"
-                value={next}
-                onChange={(e) => setNext(e.target.value)}
-              />
-            </label>
-            <label>
-              Confirm new password
-              <input
-                type="password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="head-actions">
-            <button className="primary" onClick={changePassword}>
-              Change password
-            </button>
-            <button className="danger" onClick={() => setConfirmingDisable(true)}>
-              Disable password
-            </button>
-          </div>
-        </>
+      {dev ? (
+        <p className="sub">
+          <code>DEV_AUTH</code> is on: every request is let through without sign-in. It is
+          for local development only — production uses Cloudflare Access.
+        </p>
       ) : (
         <>
           <p className="sub">
-            Password authentication is <b>disabled</b> — anyone who can reach this app
-            has full access. Re-enable it to require the password again.
+            Signed in with Google as <b>{session?.email}</b>. Who may sign in is set by the
+            Cloudflare Access policy and the <code>CF_ACCESS_ALLOWED_EMAILS</code>{" "}
+            environment variable.
           </p>
-          <button className="primary" onClick={enableAuth}>
-            Enable password
-          </button>
+          <div className="head-actions">
+            <button onClick={signOut}>Sign out</button>
+          </div>
         </>
-      )}
-
-      {confirmingDisable && (
-        <ConfirmDialog
-          title="Disable password authentication?"
-          danger
-          confirmLabel="Disable password"
-          message={
-            <>
-              <p>
-                Anyone who can reach this app will have full access with no login. Enter
-                your current password to confirm.
-              </p>
-              <input
-                type="password"
-                placeholder="Current password"
-                value={disablePw}
-                onChange={(e) => setDisablePw(e.target.value)}
-                autoFocus
-              />
-            </>
-          }
-          onConfirm={async () => {
-            try {
-              await post("/auth/disable", { current_password: disablePw });
-              setConfirmingDisable(false);
-              setDisablePw("");
-              toast.success("Password authentication disabled");
-              await onChange();
-            } catch (e) {
-              toast.error(errMsg(e));
-            }
-          }}
-          onCancel={() => {
-            setConfirmingDisable(false);
-            setDisablePw("");
-          }}
-        />
       )}
     </div>
   );
@@ -546,7 +436,7 @@ const TABS: { id: string; label: string }[] = [
 ];
 
 export default function SettingsPage() {
-  const { refresh, status } = useApp();
+  const { refresh, status, session } = useApp();
   const toast = useToast();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -608,9 +498,9 @@ export default function SettingsPage() {
           return { tone: "warn", label: "Telegram not configured" };
         return { tone: "ok", label: "Telegram ready" };
       case "security":
-        return settings.auth_disabled
-          ? { tone: "warn", label: "Password auth disabled" }
-          : { tone: "ok", label: "Password auth enabled" };
+        return session?.mode === "dev"
+          ? { tone: "warn", label: "Authentication disabled (DEV_AUTH)" }
+          : { tone: "ok", label: "Cloudflare Access" };
       default:
         return null;
     }
@@ -872,7 +762,7 @@ export default function SettingsPage() {
             <label className="span2">
               Public base URL (optional)
               <input
-                placeholder="https://mailtriage-host.tailnet-name.ts.net:8080"
+                placeholder="https://mail.example.com"
                 value={
                   draft.public_base_url !== undefined
                     ? draft.public_base_url
@@ -883,12 +773,13 @@ export default function SettingsPage() {
                 }
               />
               <span className="sub">
-                Used to build a reconnect link in Telegram auth-error alerts
-                (e.g. a Tailscale hostname). Leave blank for plain-text
-                instructions instead. Also add{" "}
+                The address MailTriage is served at (the Cloudflare tunnel
+                hostname). Used for the Gmail OAuth redirect, the sign-out
+                return address, and the reconnect link in Telegram auth-error
+                alerts. Add{" "}
                 <code>&lt;this-url&gt;/api/v1/gmail/oauth/callback</code> as
                 an authorized redirect URI in your Google Cloud OAuth client,
-                or reconnect will fail.
+                or reconnecting Gmail will fail.
               </span>
             </label>
           </div>
@@ -925,15 +816,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === "security" && (
-        <AuthSection
-          settings={settings}
-          onChange={async () => {
-            await load();
-            await refresh();
-          }}
-        />
-      )}
+      {tab === "security" && <AccessSection />}
 
       {tab === "data" && (
         <>

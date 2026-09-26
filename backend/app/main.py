@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from app import auth
+from app import cf_access
 from app.api import (
     admin_routes,
     auth_routes,
@@ -60,11 +60,15 @@ async def lifespan(app: FastAPI):
     assert_stored_scopes_safe()
     session = get_sessionmaker()()
     try:
-        auth.load_auth_state(session)
         await llm.health_probe(settings_service.get_all_settings(session, redact=False),
                                timeout=5)
     finally:
         session.close()
+    verifier = cf_access.get_verifier()
+    if verifier is not None:
+        await asyncio.to_thread(verifier.warm)
+    else:
+        log.warning("dev_auth_enabled", detail="authentication is DISABLED (DEV_AUTH)")
     poller_task = asyncio.create_task(poller_loop())
     queue_task = asyncio.create_task(classifier.queue_loop())
     stall_task = asyncio.create_task(classifier.stall_checker())

@@ -57,8 +57,10 @@ npm install
 npm run dev        # Vite dev server; proxies /api → http://localhost:8080
 ```
 
-The app refuses to start without a repo-root `.env` containing non-default `APP_SECRET_KEY`
-and `UI_PASSWORD` (enforced by `config.validate_secrets()`).
+The app refuses to start without a repo-root `.env` containing a non-default `APP_SECRET_KEY`
+and either the full Cloudflare Access config (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`,
+`CF_ACCESS_ALLOWED_EMAILS`) or `DEV_AUTH=true` — never both (enforced by
+`config.validate_secrets()`). Local dev uses `DEV_AUTH=true`, which disables auth.
 
 ## Architecture
 
@@ -91,7 +93,8 @@ Dockerfile multi-stage: node build → python runtime
   - Import order is enforced (`I`); always run `ruff check` before committing.
 - **Configuration is split in two**:
   - **Env-only** (`app/config.py`, pydantic `BaseSettings` from `.env`): `APP_SECRET_KEY`,
-    `UI_PASSWORD`, `DATABASE_URL`, `LLM_BASE_URL`, `LLM_MODEL`, `HOST`, `PORT`, `TZ` — only
+    `CF_ACCESS_*`, `DEV_AUTH`, `DATABASE_URL`, `LLM_BASE_URL`, `LLM_MODEL`, `HOST`, `PORT`,
+    `TZ` — only
     what must be known before the DB is available.
   - **DB-backed runtime settings** (`settings` table via `app/services/settings_service.py`,
     Fernet-encrypted for secrets): `poll_interval_seconds`, `poll_scope_labels`,
@@ -99,7 +102,9 @@ Dockerfile multi-stage: node build → python runtime
     user-tunable value means adding it to the service defaults, **not** `config.py`.
 - **Tests**: pytest with `asyncio_mode = auto`. Run from `backend/`. All tests must pass.
   - Fixtures in `tests/conftest.py`: `client` (fresh tmp SQLite + reset `app_state` + cleared
-    config cache, per test), `auth_client` (logged in), `db_session` (direct DB assertions).
+    config cache, per test; JWKS lookup patched to the test RSA key), `auth_client` (sends a
+    valid `Cf-Access-Jwt-Assertion` from `make_access_token()`), `db_session` (direct DB
+    assertions).
   - Gmail/HTTP traffic is mocked with `respx`; tests never hit a real LLM or Gmail.
 - **Migrations**: every schema change needs an Alembic migration in `backend/alembic/versions/`.
   - Use `sa.table()` / `sa.column()` clause elements for DML inside migrations — never import app models (they reflect the current schema, not the migration-time schema).
@@ -129,6 +134,11 @@ Dockerfile multi-stage: node build → python runtime
 docker compose build && docker compose up -d   # rebuild + restart
 docker compose logs -f mailtriage              # tail app logs
 ```
+
+The app port is published on `127.0.0.1:8080` only. Remote access is a `cloudflared`
+tunnel + Cloudflare Access (Google sign-in); the `cloudflared` service runs only with
+`COMPOSE_PROFILES=tunnel` (set on the prod host, not locally). The app verifies the Access
+JWT itself (`app/cf_access.py`). Runbook: `docs/remote-access.md`.
 
 Compose runs **Postgres** as the primary store (`mailtriage-pg` volume); the
 `mailtriage-data` SQLite volume is legacy — a migration source / fallback only.

@@ -36,13 +36,6 @@ def test_status_endpoint_is_minimal(client):
         assert needle not in body.lower()
 
 
-def test_login_rate_limited(client):
-    for _ in range(5):
-        client.post("/api/v1/auth/login", json={"password": "wrong"})
-    resp = client.post("/api/v1/auth/login", json={"password": "wrong"})
-    assert resp.status_code == 429
-
-
 def test_settings_import_roundtrip(auth_client):
     exported = auth_client.get("/api/v1/settings").json()
     exported["poll_interval_seconds"] = 600

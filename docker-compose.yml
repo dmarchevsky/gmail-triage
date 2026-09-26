@@ -2,10 +2,15 @@ services:
   mailtriage:
     build: .
     image: mailtriage:latest
-    ports: ["8080:8080"]
+    # Loopback only: remote access goes through the cloudflared tunnel below.
+    ports: ["127.0.0.1:8080:8080"]
     environment:
       - APP_SECRET_KEY=${APP_SECRET_KEY:?set in .env}
-      - UI_PASSWORD=${UI_PASSWORD:?set in .env}
+      - CF_ACCESS_TEAM_DOMAIN=${CF_ACCESS_TEAM_DOMAIN:-}
+      - CF_ACCESS_AUD=${CF_ACCESS_AUD:-}
+      - CF_ACCESS_ISSUER=${CF_ACCESS_ISSUER:-}
+      - CF_ACCESS_ALLOWED_EMAILS=${CF_ACCESS_ALLOWED_EMAILS:-}
+      - DEV_AUTH=${DEV_AUTH:-false}
       - DATABASE_URL=postgresql+psycopg://mailtriage:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/mailtriage
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8081/v1}
       - LLM_MODEL=${LLM_MODEL:-local}
@@ -13,6 +18,9 @@ services:
     volumes:
       - mailtriage-data:/data    # legacy SQLite (migration source / fallback)
     extra_hosts: ["host.docker.internal:host-gateway"]
+    # Public resolvers so the Cloudflare Access key fetch doesn't depend on
+    # Docker's resolv.conf being ready at boot.
+    dns: [1.1.1.1, 8.8.8.8]
     read_only: true
     tmpfs: ["/tmp"]
     depends_on:
@@ -39,6 +47,18 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+  # Cloudflare Tunnel: publishes the UI at the hostname configured for this tunnel
+  # in the Zero Trust dashboard (service: http://mailtriage:8080), behind a
+  # Cloudflare Access application. Enabled with COMPOSE_PROFILES=tunnel in .env.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.8.3
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}  # required when the tunnel profile is on
+    depends_on: [mailtriage]
+    restart: unless-stopped
+    profiles: ["tunnel"]
 
 #  llama-cpp:                        # OPTIONAL bundled CPU inference.
 #    image: ghcr.io/ggml-org/llama.cpp:server

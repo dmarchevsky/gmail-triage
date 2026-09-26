@@ -313,7 +313,7 @@ def _build_auth_alert_message(error: str, base_url: str | None) -> str:
         lines.append(
             "Open MailTriage → Settings → Mailbox and tap Reconnect. (Set a"
             " \"Public base URL\" in Settings → Notifications to get a direct"
-            " link here when you're away from the LAN.)"
+            " link here.)"
         )
     lines.append("You'll get a reminder once every 24h until this is resolved.")
     return "\n".join(lines)

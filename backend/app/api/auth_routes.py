@@ -1,91 +1,41 @@
-"""Login/logout/session and password-management endpoints for the web UI."""
+"""Session probe and logout for the web UI (identity comes from Cloudflare Access)."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app import auth
+from app import auth, cf_access
 from app.db import get_session
 from app.services import settings_service
-from app.services.audit import audit
-from app.state import app_state
 
 router = APIRouter(prefix="/auth")
 
 
-class LoginBody(BaseModel):
-    password: str
-
-
-class ChangePasswordBody(BaseModel):
-    current_password: str = ""
-    new_password: str
-
-
-class CurrentPasswordBody(BaseModel):
-    current_password: str = ""
-
-
-@router.post("/login")
-def login(body: LoginBody, response: Response) -> dict:
-    if auth.login_rate_limited():
-        raise HTTPException(status_code=429, detail="Too many login attempts; wait a minute")
-    auth.record_login_attempt()
-    if not auth.check_password(body.password):
-        raise HTTPException(status_code=401, detail="Invalid password")
-    auth.set_session_cookie(response)
-    return {"ok": True}
-
-
-@router.post("/logout")
-def logout(response: Response) -> dict:
-    response.delete_cookie(auth.SESSION_COOKIE)
-    return {"ok": True}
+def _logout_url(session: Session) -> str | None:
+    verifier = cf_access.get_verifier()
+    if verifier is None:
+        return None
+    base = (settings_service.get_setting(session, "public_base_url") or "").rstrip("/")
+    return verifier.logout_url(f"{base}/" if base else "")
 
 
 @router.get("/session")
-def session_info(request: Request) -> dict:
-    token = request.cookies.get(auth.SESSION_COOKIE)
-    authenticated = app_state.auth_disabled or bool(token and auth.session_token_valid(token))
-    return {"authenticated": authenticated, "auth_disabled": app_state.auth_disabled}
+async def session_info(request: Request, session: Session = Depends(get_session)):
+    """Public: tells the UI who is signed in, or why nobody is."""
+    mode = "dev" if cf_access.get_verifier() is None else "cf_access"
+    body = {"authenticated": False, "email": None, "mode": mode,
+            "logout_url": _logout_url(session)}
+    try:
+        body.update(authenticated=True, email=await auth.authenticate(request))
+    except cf_access.AccessUnavailable:
+        return JSONResponse({**body, "detail": "Cannot reach Cloudflare to check sign-in"},
+                            status_code=503, headers={"Retry-After": "30"})
+    except cf_access.AccessRejected as exc:
+        return JSONResponse({**body, "detail": str(exc)}, status_code=exc.status_code)
+    return body
 
 
-@router.put("/password")
-def change_password(body: ChangePasswordBody,
-                    session: Session = Depends(get_session)) -> dict:
-    if not body.new_password.strip():
-        raise HTTPException(status_code=400, detail="New password must not be empty")
-    # Verify the current password only when one is actually active.
-    if auth.password_is_set() and not auth.check_password(body.current_password):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-    settings_service.set_setting(session, "ui_password_hash",
-                                 auth.hash_password(body.new_password))
-    settings_service.set_setting(session, "auth_disabled", False)
-    audit(session, "user", "password_changed")
-    session.commit()
-    auth.load_auth_state(session)
-    return {"ok": True}
-
-
-@router.post("/disable")
-def disable_auth(body: CurrentPasswordBody,
-                 session: Session = Depends(get_session)) -> dict:
-    if auth.password_is_set() and not auth.check_password(body.current_password):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-    settings_service.set_setting(session, "auth_disabled", True)
-    audit(session, "user", "auth_disabled")
-    session.commit()
-    auth.load_auth_state(session)
-    return {"ok": True}
-
-
-@router.post("/enable")
-def enable_auth(session: Session = Depends(get_session)) -> dict:
-    if not auth.password_is_set():
-        raise HTTPException(status_code=400,
-                            detail="Set a password before re-enabling authentication")
-    settings_service.set_setting(session, "auth_disabled", False)
-    audit(session, "user", "auth_enabled")
-    session.commit()
-    auth.load_auth_state(session)
-    return {"ok": True}
+@router.post("/logout")
+def logout(session: Session = Depends(get_session)) -> dict:
+    """No app session to clear — the UI navigates to the Access logout URL."""
+    return {"ok": True, "logout_url": _logout_url(session)}

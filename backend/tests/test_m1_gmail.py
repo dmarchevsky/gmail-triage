@@ -571,14 +571,14 @@ async def test_auth_alert_sent_immediately_on_first_failure(connected, db_sessio
     from app.services import poller, settings_service
     settings_service.set_setting(db_session, "telegram_bot_token", "TOKEN")
     settings_service.set_setting(db_session, "telegram_default_chat_id", "555")
-    settings_service.set_setting(db_session, "public_base_url", "https://host.ts.net:8080")
+    settings_service.set_setting(db_session, "public_base_url", "https://mail.example.com")
     db_session.commit()
     tg = respx.post("https://api.telegram.org/botTOKEN/sendMessage").mock(
         return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))
     await poller._maybe_send_auth_alert(db_session, "Gmail API returned 401")
     assert tg.called
     sent = json.loads(tg.calls.last.request.content)
-    assert "host.ts.net:8080/#/settings?tab=mailbox" in sent["text"]
+    assert "mail.example.com/#/settings?tab=mailbox" in sent["text"]
     db_session.expire_all()
     assert connected.last_auth_alert_at is not None
 
@@ -658,3 +658,20 @@ async def test_poll_once_clears_alert_marker_on_recovery(connected, db_session):
         await poller.poll_once(db_session)
     db_session.expire_all()
     assert connected.last_auth_alert_at is None
+
+
+def test_redirect_uri_uses_public_base_url_on_public_host(auth_client):
+    """Behind the tunnel uvicorn sees plain http; on the public host the redirect URI
+    must come from public_base_url (https) to match the one registered with Google."""
+    auth_client.put("/api/v1/settings", json={"public_base_url": "https://mail.example.com/"})
+
+    def redirect_uri(host):
+        resp = auth_client.post("/api/v1/gmail/oauth/start", headers={"Host": host},
+                                json={"client_secret_json": CLIENT_SECRET_JSON})
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(resp.json()["auth_url"]).query)
+        return query["redirect_uri"][0]
+
+    assert redirect_uri("mail.example.com") == (
+        "https://mail.example.com/api/v1/gmail/oauth/callback")
+    # any other host (local dev, LAN) keeps using the request's own URL
+    assert redirect_uri("localhost:8080") == "http://localhost:8080/api/v1/gmail/oauth/callback"
