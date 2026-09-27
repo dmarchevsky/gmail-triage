@@ -1,5 +1,7 @@
 // Typed fetch wrapper + API types for MailTriage.
 
+import { currentRoute, openUrl } from "./deeplink";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -14,8 +16,9 @@ export const errMsg = (e: unknown): string =>
 
 // Cloudflare Access sits in front of the app. When its session expires, API
 // calls are redirected to the Access login page (cross-origin), which fetch
-// cannot follow. Reload once so the top-level navigation re-authenticates; the
-// sessionStorage flag stops a reload loop if that doesn't help.
+// cannot follow. Reload once so the top-level navigation re-authenticates —
+// via openUrl() so the user lands back on the same screen after signing in;
+// the sessionStorage flag stops a reload loop if that doesn't help.
 const ACCESS_RELOAD_FLAG = "mailtriage.access-reload";
 
 function reloadForAccess(): void {
@@ -25,7 +28,7 @@ function reloadForAccess(): void {
   } catch {
     return; // storage unavailable: never risk a reload loop
   }
-  window.location.reload();
+  window.location.replace(openUrl(currentRoute()));
 }
 
 function clearAccessReloadFlag(): void {
@@ -288,6 +291,8 @@ export interface Digest {
   collapsed_sections: boolean;
   mode: "assemble" | "synthesize";
   email_threshold: number | null;
+  notify_telegram: boolean;
+  notify_inapp: boolean;
   last_run: DigestLastRun | null;
 }
 
@@ -297,14 +302,54 @@ export interface LlmQueue {
   digests: { run_id: number; digest_id: number; name: string; started_at: string | null }[];
 }
 
+export interface DigestItem {
+  email_id: number;
+  subject: string;
+  sender: string;
+  received_at: string | null;
+  summary: string;
+  gmail_url: string | null;
+  category: string | null;
+}
+
+/** Channel-independent snapshot of what a digest run said. */
+export interface DigestContent {
+  mode: "assemble" | "synthesize";
+  title: string;
+  generated_at: string;
+  timezone: string;
+  email_count: number;
+  headline: string | null;
+  body: string | null;
+  items: DigestItem[];
+}
+
 export interface DigestRun {
   id: number;
+  digest_id: number;
+  digest_name?: string | null;
   started_at: string | null;
   finished_at: string | null;
   status: string;
   email_ids: number[];
   summary_text: string | null;
+  content: DigestContent | null;
   error: string | null;
+  notified_inapp: boolean;
+  read_at: string | null;
+}
+
+/** A row of the cross-digest inbox feed. */
+export interface DigestFeedItem {
+  id: number;
+  digest_id: number;
+  digest_name: string;
+  started_at: string | null;
+  status: string;
+  email_count: number;
+  headline: string | null;
+  notified_inapp: boolean;
+  read_at: string | null;
 }
 
 export interface FeedbackItem {

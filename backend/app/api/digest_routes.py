@@ -1,14 +1,15 @@
-"""Digest CRUD, run-now, run history."""
+"""Digest CRUD, run-now, run history, and the in-app digest inbox."""
 
+from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import Category, Digest, DigestRun
+from app.models import Category, Digest, DigestRun, DigestRunStatus
 from app.services import digest_scheduler
 from app.services.audit import audit
 from app.services.digests import run_digest
@@ -32,6 +33,8 @@ class DigestIn(BaseModel):
     collapsed_sections: bool = False
     mode: Literal["assemble", "synthesize"] = "assemble"
     email_threshold: int | None = Field(default=None, ge=1)
+    notify_telegram: bool = True
+    notify_inapp: bool = False
 
     @field_validator("cron_times")
     @classmethod
@@ -39,6 +42,12 @@ class DigestIn(BaseModel):
         for t in v:
             digest_scheduler.parse_hhmm(t)
         return v
+
+    @model_validator(mode="after")
+    def validate_channels(self) -> "DigestIn":
+        if not (self.notify_telegram or self.notify_inapp):
+            raise ValueError("Enable at least one delivery channel (Telegram or In-app)")
+        return self
 
 
 def serialize(d: Digest, last_run: dict | None = None) -> dict:
@@ -52,6 +61,7 @@ def serialize(d: Digest, last_run: dict | None = None) -> dict:
         "max_emails": d.max_emails, "send_no_news": d.send_no_news,
         "collapsed_sections": d.collapsed_sections,
         "mode": d.mode, "email_threshold": d.email_threshold,
+        "notify_telegram": d.notify_telegram, "notify_inapp": d.notify_inapp,
         "last_run": last_run,
     }
 
@@ -86,8 +96,23 @@ def serialize_run(r: DigestRun) -> dict:
         "started_at": r.started_at.isoformat() if r.started_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
         "status": r.status, "email_ids": r.email_ids,
-        "summary_text": r.summary_text,
+        "summary_text": r.summary_text, "content": r.content,
         "telegram_message_id": r.telegram_message_id, "error": r.error,
+        "notified_inapp": r.notified_inapp,
+        "read_at": r.read_at.isoformat() if r.read_at else None,
+    }
+
+
+def serialize_feed_item(r: DigestRun, digest_name: str) -> dict:
+    content = r.content or {}
+    return {
+        "id": r.id, "digest_id": r.digest_id, "digest_name": digest_name,
+        "started_at": r.started_at.isoformat() if r.started_at else None,
+        "status": r.status,
+        "email_count": content.get("email_count", len(r.email_ids or [])),
+        "headline": content.get("headline"),
+        "notified_inapp": r.notified_inapp,
+        "read_at": r.read_at.isoformat() if r.read_at else None,
     }
 
 
@@ -98,6 +123,67 @@ def _check_categories(session: Session, ids: list[int]) -> None:
     for cid in ids:
         if cid not in found:
             raise HTTPException(status_code=400, detail=f"Unknown category id {cid}")
+
+
+# ── In-app inbox ─────────────────────────────────────────────────────────────
+# Declared before the /{digest_id} routes so "runs" never hits the int param.
+
+_UNREAD = (DigestRun.notified_inapp.is_(True), DigestRun.read_at.is_(None))
+_READABLE = [DigestRunStatus.success.value, DigestRunStatus.dry_run.value,
+             DigestRunStatus.empty.value]
+
+
+@router.get("/runs")
+def list_runs(limit: int = Query(default=30, ge=1, le=100),
+              before_id: int | None = None, unread: bool = False,
+              include_all: bool = False,
+              session: Session = Depends(get_session)) -> list[dict]:
+    """Digest runs across all digests, newest first. By default only runs that
+    have something to read (sent / preview / empty); include_all adds
+    errored and in-flight ones."""
+    query = (select(DigestRun, Digest.name).join(Digest, Digest.id == DigestRun.digest_id)
+             .order_by(DigestRun.id.desc()).limit(limit))
+    if before_id is not None:
+        query = query.where(DigestRun.id < before_id)
+    if unread:
+        query = query.where(*_UNREAD)
+    if not include_all:
+        query = query.where(DigestRun.status.in_(_READABLE) | DigestRun.notified_inapp)
+    return [serialize_feed_item(run, name) for run, name in session.execute(query)]
+
+
+@router.get("/runs/unread-count")
+def unread_count(session: Session = Depends(get_session)) -> dict:
+    return {"unread": session.scalar(
+        select(func.count(DigestRun.id)).where(*_UNREAD)) or 0}
+
+
+@router.post("/runs/read-all")
+def mark_all_read(session: Session = Depends(get_session)) -> dict:
+    result = session.execute(update(DigestRun).where(*_UNREAD)
+                             .values(read_at=datetime.now(UTC)))
+    session.commit()
+    return {"updated": result.rowcount or 0}
+
+
+@router.get("/runs/{run_id}")
+def get_run(run_id: int, session: Session = Depends(get_session)) -> dict:
+    run = session.get(DigestRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Digest run not found")
+    digest = session.get(Digest, run.digest_id)
+    return {**serialize_run(run), "digest_name": digest.name if digest else None}
+
+
+@router.post("/runs/{run_id}/read")
+def mark_read(run_id: int, session: Session = Depends(get_session)) -> dict:
+    run = session.get(DigestRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Digest run not found")
+    if run.read_at is None:
+        run.read_at = datetime.now(UTC)
+        session.commit()
+    return serialize_run(run)
 
 
 @router.get("")

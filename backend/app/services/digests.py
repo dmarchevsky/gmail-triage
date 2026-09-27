@@ -22,7 +22,7 @@ from app.models import (
     Email,
     EmailStatus,
 )
-from app.services import llm, settings_service, telegram
+from app.services import llm, settings_service, telegram, webpush
 from app.services.audit import audit
 from app.services.classifier import digest_stale_after_seconds, strip_summary_html
 from app.state import app_state
@@ -269,10 +269,7 @@ def _summary_body(summary: str, expandable: bool = False) -> list[str]:
 def _render_message(digest: Digest, emails: list[Email], summary: str,
                     dry_run_prefix: bool) -> str:
     esc = telegram.escape_html
-    try:
-        tz = ZoneInfo(digest.timezone or "UTC")
-    except (KeyError, ZoneInfoNotFoundError):
-        tz = UTC
+    tz = _digest_tz(digest)
     parts = []
     if dry_run_prefix:
         parts.append("[DRY RUN]")
@@ -282,6 +279,90 @@ def _render_message(digest: Digest, emails: list[Email], summary: str,
         f"<b>{len(emails)}</b> new email(s)")
     parts.extend(_summary_body(summary, digest.collapsed_sections))
     return "\n\n".join(parts)
+
+
+def _digest_tz(digest: Digest) -> ZoneInfo:
+    try:
+        return ZoneInfo(digest.timezone or "UTC")
+    except (KeyError, ZoneInfoNotFoundError):
+        return UTC
+
+
+def build_content(digest: Digest, emails: list[Email], summary: str,
+                  tz: ZoneInfo) -> dict:
+    """Channel-independent snapshot of a digest run, rendered by the in-app
+    digest view. Self-contained (no email FKs) so it outlives retention."""
+    items = [{
+        "email_id": e.id,
+        "subject": e.subject or "(no subject)",
+        "sender": _display_name(e.sender),
+        "received_at": e.received_at.isoformat() if e.received_at else None,
+        "summary": strip_summary_html((e.summary or e.snippet or "").strip()),
+        "gmail_url": (GMAIL_DEEP_LINK.format(msg_id=e.gmail_message_id)
+                      if e.gmail_message_id else None),
+        "category": e.classification.name if e.classification else None,
+    } for e in emails]
+
+    headline: str | None = None
+    body: str | None = None
+    if digest.mode == "synthesize" and summary.strip():
+        first, _, rest = _normalize_summary(summary).partition("\n")
+        headline, body = first or None, rest.strip() or None
+    elif items:
+        subjects = [i["subject"] for i in items[:3]]
+        more = len(items) - len(subjects)
+        headline = ", ".join(subjects) + (f" +{more} more" if more > 0 else "")
+
+    return {"mode": digest.mode, "title": digest.name,
+            "generated_at": datetime.now(tz).isoformat(), "timezone": str(tz),
+            "email_count": len(emails), "headline": headline, "body": body,
+            "items": items}
+
+
+async def _deliver(session: Session, digest: Digest, run: DigestRun, settings: dict,
+                   telegram_parts: list[str]) -> None:
+    """Deliver to every enabled channel. A channel failure is recorded on
+    `run.error` but doesn't fail the run if another channel delivered — so the
+    watermark still advances and the in-app channel never repeats emails just
+    because Telegram was down. Raises when nothing was delivered."""
+    delivered = False
+    errors: list[str] = []
+    first_failure: Exception | None = None
+
+    if digest.notify_telegram:
+        try:
+            token = settings.get("telegram_bot_token")
+            chat_id = digest.telegram_chat_id or settings.get("telegram_default_chat_id")
+            if not token or not chat_id:
+                raise telegram.TelegramError(
+                    "Telegram bot token / chat id not configured")
+            ids: list[str] = []
+            for part in telegram_parts:
+                ids.extend(await telegram.send_message(token, str(chat_id), part))
+            run.telegram_message_id = ",".join(ids) or None
+            app_state.telegram_status = "ok"
+            delivered = True
+        except Exception as e:  # noqa: BLE001 — recorded per channel, see docstring
+            if isinstance(e, telegram.TelegramError):
+                app_state.telegram_status = "error"
+            log.error("digest_telegram_failed", digest_id=digest.id, error=str(e))
+            errors.append(f"telegram: {e}")
+            first_failure = first_failure or e
+
+    if digest.notify_inapp:
+        # The inbox entry *is* the in-app delivery; push is a best-effort nudge.
+        run.notified_inapp = True
+        session.commit()
+        delivered = True
+        try:
+            await webpush.notify_all(session, webpush.digest_payload(digest, run))
+        except Exception as e:  # noqa: BLE001
+            log.error("digest_push_failed", digest_id=digest.id, error=str(e))
+
+    if errors:
+        run.error = "; ".join(errors)[:500]
+    if not delivered:
+        raise first_failure or ValueError("No delivery channel enabled for this digest")
 
 
 async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
@@ -318,6 +399,7 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
     session.commit()
 
     try:
+        tz = _digest_tz(digest)
         emails = eligible_emails(session, digest)
         run.email_ids = [e.id for e in emails]
         # Commit before the (potentially minutes-long) summarization so no
@@ -326,15 +408,10 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
 
         if not emails:
             run.status = DigestRunStatus.empty.value
+            run.content = build_content(digest, [], "", tz)
             if digest.send_no_news and not preview:
-                token = settings.get("telegram_bot_token")
-                chat_id = digest.telegram_chat_id \
-                    or settings.get("telegram_default_chat_id")
-                if token and chat_id:
-                    await telegram.send_message(
-                        token, str(chat_id),
-                        f"✅ <b>{telegram.escape_html(digest.name)}</b>: no news.",
-                    )
+                await _deliver(session, digest, run, settings, [
+                    f"✅ <b>{telegram.escape_html(digest.name)}</b>: no news."])
             run.finished_at = datetime.now(UTC)
             session.commit()
             return run
@@ -346,40 +423,22 @@ async def run_digest(session: Session, digest: Digest, actor: str = "scheduler",
             # rather than silently shipping a bodyless digest. Emails stay eligible.
             raise llm.LLMError(
                 "digest body empty after retry and micro-summary fallback")
+        run.content = build_content(digest, emails, summary, tz)
 
         if preview:
             run.status = DigestRunStatus.dry_run.value
         else:
-            token = settings.get("telegram_bot_token")
-            chat_id = digest.telegram_chat_id or settings.get("telegram_default_chat_id")
-            if not token or not chat_id:
-                raise telegram.TelegramError(
-                    "Telegram bot token / chat id not configured")
-
             if digest.mode == "assemble":
-                try:
-                    tz = ZoneInfo(digest.timezone or "UTC")
-                except (KeyError, ZoneInfoNotFoundError):
-                    tz = UTC
-                msg_parts = _render_assemble_messages(
-                    digest, emails, dry_run_prefix=False, tz=tz)
-                ids: list[str] = []
-                for part in msg_parts:
-                    ids.extend(await telegram.send_message(token, str(chat_id), part))
+                parts = _render_assemble_messages(digest, emails, dry_run_prefix=False, tz=tz)
             else:
-                message = _render_message(digest, emails, summary, dry_run_prefix=False)
-                ids = await telegram.send_message(token, str(chat_id), message)
-
-            run.telegram_message_id = ",".join(ids)
-            app_state.telegram_status = "ok"
+                parts = [_render_message(digest, emails, summary, dry_run_prefix=False)]
+            await _deliver(session, digest, run, settings, parts)
             run.status = DigestRunStatus.success.value
     except Exception as e:  # noqa: BLE001 — any failure must mark the run errored,
         # never leave it stuck in `running` (CancelledError is BaseException and
         # still propagates so shutdown/cancellation is not swallowed).
         run.status = DigestRunStatus.error.value
         run.error = str(e)[:500]
-        if isinstance(e, telegram.TelegramError):
-            app_state.telegram_status = "error"
         log.error("digest_run_failed", digest_id=digest.id, error=str(e))
     finally:
         run.finished_at = datetime.now(UTC)

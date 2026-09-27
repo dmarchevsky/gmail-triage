@@ -38,6 +38,8 @@ export const EVENT_LABELS: Record<string, string> = {
   digest_deleted: "Digest deleted",
   digests_bulk_updated: "Digests updated",
   digest_run: "Digest sent",
+  push_subscribed: "Notifications turned on",
+  push_unsubscribed: "Notifications turned off",
   // feedback / criteria
   feedback_created: "Feedback added",
   feedback_dismissed: "Feedback dismissed",

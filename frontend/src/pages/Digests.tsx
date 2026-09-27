@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
-import { Category, Digest, DigestRun, del, delWithBody, errMsg, get, post, put } from "../api";
+import { Link, useSearchParams } from "react-router-dom";
+import {
+  Category,
+  Digest,
+  DigestFeedItem,
+  DigestRun,
+  del,
+  delWithBody,
+  errMsg,
+  get,
+  post,
+  put,
+} from "../api";
+import { useApp } from "../App";
 import { useSelection } from "../useSelection";
 import {
   AsyncButton,
@@ -10,9 +23,10 @@ import {
   Toggle,
   fmtDate,
   pct,
+  runTone,
 } from "../components";
 import { useToast } from "../toast";
-import { History, Pencil, Send, Trash2 } from "lucide-react";
+import { Bell, History, Pencil, Send, Trash2 } from "lucide-react";
 
 interface DigestForm {
   name: string;
@@ -29,6 +43,8 @@ interface DigestForm {
   collapsed_sections: boolean;
   mode: "assemble" | "synthesize";
   email_threshold: number | "";
+  notify_telegram: boolean;
+  notify_inapp: boolean;
 }
 
 function DigestEditor({
@@ -59,6 +75,8 @@ function DigestEditor({
     collapsed_sections: digest?.collapsed_sections ?? false,
     mode: digest?.mode ?? "assemble",
     email_threshold: digest?.email_threshold ?? "",
+    notify_telegram: digest?.notify_telegram ?? true,
+    notify_inapp: digest?.notify_inapp ?? false,
   });
   const toggleCategory = (id: number) =>
     setForm({
@@ -133,13 +151,39 @@ function DigestEditor({
             )}
           </div>
         </div>
-        <label>
-          Telegram chat id (empty = default from Settings)
-          <input
-            value={form.telegram_chat_id}
-            onChange={(e) => setForm({ ...form, telegram_chat_id: e.target.value })}
-          />
-        </label>
+        <div className="span2">
+          <p className="field-label">Deliver to</p>
+          <div className="head-actions">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={form.notify_telegram}
+                onChange={(e) => setForm({ ...form, notify_telegram: e.target.checked })}
+              />
+              Telegram
+            </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={form.notify_inapp}
+                onChange={(e) => setForm({ ...form, notify_inapp: e.target.checked })}
+              />
+              In-app (Digests inbox + push notification on devices with notifications on)
+            </label>
+          </div>
+          {!form.notify_telegram && !form.notify_inapp && (
+            <p className="error">Pick at least one delivery channel.</p>
+          )}
+        </div>
+        {form.notify_telegram && (
+          <label>
+            Telegram chat id (empty = default from Settings)
+            <input
+              value={form.telegram_chat_id}
+              onChange={(e) => setForm({ ...form, telegram_chat_id: e.target.value })}
+            />
+          </label>
+        )}
         <label>
           Max emails per digest
           <input
@@ -220,24 +264,17 @@ function DigestEditor({
       </div>
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
-        <button className="primary" onClick={save}>
+        <button
+          className="primary"
+          onClick={save}
+          disabled={!form.notify_telegram && !form.notify_inapp}
+        >
           Save
         </button>
       </div>
     </Modal>
   );
 }
-
-const runTone = (s: string) =>
-  s === "running"
-    ? "info"
-    : s === "success"
-      ? "ok"
-      : s === "error"
-        ? "error"
-        : s === "dry_run"
-          ? "dry"
-          : "neutral";
 
 function RunHistory({ digest, onClose }: { digest: Digest; onClose: () => void }) {
   const [runs, setRuns] = useState<DigestRun[]>([]);
@@ -252,17 +289,111 @@ function RunHistory({ digest, onClose }: { digest: Digest; onClose: () => void }
         <div key={r.id} className="settings-section">
           <p>
             {fmtDate(r.started_at)} <Badge tone={runTone(r.status)}>{r.status}</Badge>{" "}
-            <span className="sub">{r.email_ids.length} email(s)</span>
+            <span className="sub">{r.email_ids.length} email(s)</span>{" "}
+            {r.status !== "running" && r.status !== "error" && (
+              <Link to={`/digests/runs/${r.id}`}>Open</Link>
+            )}
           </p>
           {r.error && <p className="error">{r.error}</p>}
-          {r.summary_text && <div className="digest-summary">{r.summary_text}</div>}
+          {!r.content && r.summary_text && (
+            <div className="digest-summary">{r.summary_text}</div>
+          )}
+          {r.content?.headline && <p className="sub">{r.content.headline}</p>}
         </div>
       ))}
     </Modal>
   );
 }
 
+const FEED_PAGE = 30;
+
+/** Delivered digests across all digests, newest first. */
+function DigestInbox() {
+  const { unreadDigests, refreshUnread } = useApp();
+  const toast = useToast();
+  const [items, setItems] = useState<DigestFeedItem[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+
+  const load = useCallback(async () => {
+    const page = await get<DigestFeedItem[]>(`/digests/runs?limit=${FEED_PAGE}`);
+    setItems(page);
+    setHasMore(page.length === FEED_PAGE);
+  }, []);
+  // Reload when the heartbeat's unread count changes (a new digest arrived).
+  useEffect(() => {
+    load().catch((e) => toast.error(errMsg(e)));
+  }, [load, unreadDigests]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMore = async () => {
+    if (!items?.length) return;
+    const page = await get<DigestFeedItem[]>(
+      `/digests/runs?limit=${FEED_PAGE}&before_id=${items[items.length - 1].id}`,
+    );
+    setItems([...items, ...page]);
+    setHasMore(page.length === FEED_PAGE);
+  };
+
+  const markAllRead = async () => {
+    await post("/digests/runs/read-all");
+    await refreshUnread();
+    await load();
+  };
+
+  if (items === null) return <p className="sub">Loading…</p>;
+  return (
+    <div>
+      <div className="head-actions inbox-actions">
+        <AsyncButton onClick={markAllRead} disabled={unreadDigests === 0}>
+          Mark all read
+        </AsyncButton>
+      </div>
+      {items.length === 0 && (
+        <p className="sub">
+          No digests yet. They appear here after each run; turn on <b>In-app</b> delivery on
+          a digest to get unread badges and push notifications.
+        </p>
+      )}
+      <ul className="digest-feed">
+        {items.map((f) => {
+          const unread = f.notified_inapp && !f.read_at;
+          return (
+            <li key={f.id}>
+              <Link to={`/digests/runs/${f.id}`} className={unread ? "unread" : ""}>
+                <span className="feed-dot" aria-label={unread ? "Unread" : undefined} />
+                <span className="feed-main">
+                  <span className="feed-title">
+                    <b>{f.digest_name}</b>{" "}
+                    <span className="sub">
+                      · {f.email_count} email{f.email_count === 1 ? "" : "s"}
+                    </span>
+                    {f.status !== "success" && (
+                      <>
+                        {" "}
+                        <Badge tone={runTone(f.status)}>{f.status}</Badge>
+                      </>
+                    )}
+                  </span>
+                  {f.headline && <span className="feed-headline">{f.headline}</span>}
+                </span>
+                <span className="feed-date sub">{fmtDate(f.started_at)}</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      {hasMore && (
+        <div className="head-actions">
+          <AsyncButton onClick={loadMore}>Load more</AsyncButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Digests() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "configure" ? "configure" : "inbox";
+  const { unreadDigests } = useApp();
   const [digests, setDigests] = useState<Digest[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Digest | null | "new">(null);
@@ -278,17 +409,6 @@ export default function Digests() {
     const id = setInterval(load, 10000); // keep run status live
     return () => clearInterval(id);
   }, [load]);
-
-  const runTone = (s: string) =>
-    s === "running"
-      ? "info"
-      : s === "success"
-        ? "ok"
-        : s === "error"
-          ? "error"
-          : s === "dry_run"
-            ? "dry"
-            : "neutral";
 
   const catNames = (ids: number[]) =>
     ids.map((id) => categories.find((c) => c.id === id)?.name ?? `#${id}`).join(", ");
@@ -347,11 +467,32 @@ export default function Digests() {
     <div>
       <header className="page-head">
         <h2>Digests</h2>
-        <button className="primary" onClick={() => setEditing("new")}>
-          + New digest
-        </button>
+        {tab === "configure" && (
+          <button className="primary" onClick={() => setEditing("new")}>
+            + New digest
+          </button>
+        )}
       </header>
 
+      <nav className="settings-tabs">
+        <button
+          className={tab === "inbox" ? "active" : ""}
+          onClick={() => setParams({}, { replace: true })}
+        >
+          Inbox
+          {unreadDigests > 0 && <span className="nav-count">{unreadDigests}</span>}
+        </button>
+        <button
+          className={tab === "configure" ? "active" : ""}
+          onClick={() => setParams({ tab: "configure" }, { replace: true })}
+        >
+          Configure
+        </button>
+      </nav>
+
+      {tab === "inbox" && <DigestInbox />}
+      {tab === "configure" && (
+      <>
       <BulkActionBar
         count={selectedIds.size}
         onClear={clearSelection}
@@ -398,6 +539,12 @@ export default function Digests() {
                 <button className="name-link" onClick={() => setEditing(d)}>
                   <b>{d.name}</b>
                 </button>
+                {d.notify_inapp && (
+                  <span className="sub" title="Delivered in-app">
+                    {" "}
+                    <Bell size={12} />
+                  </span>
+                )}
               </td>
               <td data-label="Schedule">
                 {d.cron_times.join(", ")} <span className="sub">{d.timezone}</span>
@@ -423,6 +570,8 @@ export default function Digests() {
                       collapsed_sections: d.collapsed_sections,
                       mode: d.mode,
                       email_threshold: d.email_threshold,
+                      notify_telegram: d.notify_telegram,
+                      notify_inapp: d.notify_inapp,
                     });
                     load();
                   }}
@@ -480,6 +629,8 @@ export default function Digests() {
         </tbody>
       </table>
       </div>
+      </>
+      )}
 
       {editing !== null && (
         <DigestEditor
@@ -511,7 +662,7 @@ export default function Digests() {
           message={
             <p>
               This will immediately send <b>{selectedIds.size}</b> digest
-              {selectedIds.size === 1 ? "" : "s"} via Telegram.
+              {selectedIds.size === 1 ? "" : "s"} to their delivery channels.
             </p>
           }
           onConfirm={async () => {

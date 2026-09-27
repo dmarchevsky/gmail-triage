@@ -284,6 +284,9 @@ class Digest(Base):
     collapsed_sections: Mapped[bool] = mapped_column(Boolean, default=False)
     mode: Mapped[str] = mapped_column(String(16), default="assemble")
     email_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Delivery channels. In-app = unread entry in the Digests inbox + Web Push.
+    notify_telegram: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_inapp: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,
                                                  onupdate=utcnow)
@@ -307,8 +310,28 @@ class DigestRun(Base):
     status: Mapped[str] = mapped_column(String(16), default=DigestRunStatus.running.value)
     email_ids: Mapped[list] = mapped_column(JSON, default=list)
     summary_text: Mapped[str | None] = mapped_column(Text)
-    telegram_message_id: Mapped[str | None] = mapped_column(String(64))
+    # Channel-independent snapshot of what the digest said (see
+    # digests.build_content) — survives retention deleting the source emails.
+    content: Mapped[dict | None] = mapped_column(JSON)
+    telegram_message_id: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
+    # Delivered to the in-app inbox; unread until read_at is set.
+    notified_inapp: Mapped[bool] = mapped_column(Boolean, default=False)
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class PushSubscription(Base):
+    """A browser Web Push subscription (one per installed app / browser profile)."""
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(128))
+    auth: Mapped[str] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AuditLog(Base):

@@ -17,6 +17,7 @@ from app.models import (
     EmailAction,
     Feedback,
     GmailAuth,
+    PushSubscription,
     Rule,
     Setting,
 )
@@ -28,7 +29,8 @@ log = get_logger(__name__)
 
 # FK-safe order: children before parents.
 PROCESSING_TABLES = [EmailAction, Feedback, DigestRun, Email, AuditLog]
-CONFIG_TABLES = [CategoryCriteriaHistory, Rule, Digest, Category, Setting, GmailAuth]
+CONFIG_TABLES = [CategoryCriteriaHistory, Rule, Digest, Category, Setting, GmailAuth,
+                 PushSubscription]
 
 
 def _delete_all(session: Session, models: list) -> dict[str, int]:

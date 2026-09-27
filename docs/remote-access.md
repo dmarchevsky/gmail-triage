@@ -123,6 +123,50 @@ would come out as `http://…`, because TLS ends at Cloudflare, and Google would
 The existing Gmail connection keeps working through the switch. Its refresh token isn't tied
 to a redirect URI, so you only need the new one when you click **Connect** again.
 
+### 7. Install as an app (PWA) and push notifications
+
+MailTriage ships a web app manifest and a service worker, so it can be installed from the
+browser: Chrome/Edge → *Install app*, Android → *Add to Home screen*, iPhone/iPad (Safari)
+→ Share → *Add to Home Screen*.
+
+**Let the icons and manifest through Access (recommended).** Browsers fetch the manifest
+and icons outside the page, sometimes without cookies (Android re-checks the manifest in
+the background to update the installed app). Behind Access, those fetches get the login
+redirect and the install or update fails. The page already asks for the manifest with
+credentials, which covers the usual case. To make install and updates reliable, add a second
+Access application that bypasses these static, non-sensitive files:
+
+| Field | Value |
+|---|---|
+| Name | `MailTriage static` |
+| Domain | `mail.example.com`, paths `manifest.webmanifest`, `icons/*`, `favicon.svg` |
+| Policy | Action **Bypass**, Include → **Everyone** |
+
+Everything else (the UI, `sw.js`, `/api/*`) stays behind the Google-only application.
+
+**Session duration.** An installed app is opened and closed often, and each expired session
+means another Google sign-in. Use a longer session on the main application (e.g. `1 month`).
+
+**What re-auth looks like.** When the Access session expires, the app's next API call is
+redirected to the Access login, and the app reloads itself through it. In an installed app the
+Google page opens as an in-app sheet and returns to the app afterwards. The app keeps its
+current screen across the sign-in: it reloads as `/?open=<route>`, because the `#/route`
+fragment doesn't survive the Access → Google → Access redirects. iOS keeps a separate
+cookie jar for Home-Screen apps, so you sign in once inside the installed app even if Safari
+is already signed in.
+
+**Push notifications.** Turn on *In-app* delivery on a digest (Digests → Configure → edit),
+then on each device open **Settings → Notifications → Notifications on this device → Turn on**.
+Each in-app digest appears as unread in **Digests → Inbox** and is pushed to those devices.
+Tapping the notification opens the digest, signing in first if the session expired.
+
+- Pushes go from the server straight to the browser vendor's push service (Google FCM,
+  Mozilla, Apple, Microsoft). They never pass through the tunnel or Access. The container
+  needs outbound HTTPS to them, and the server only sends to those hosts.
+- On iPhone/iPad, push works only in the Home-Screen app (iOS 16.4+), not in a Safari tab.
+- The VAPID key is generated on first use and stored encrypted in the settings table. Purging
+  configuration (Settings → Data) resets it, so turn notifications on again on each device.
+
 ## Break-glass (Cloudflare or Google down)
 
 On the host:

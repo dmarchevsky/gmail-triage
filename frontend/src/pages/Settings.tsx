@@ -4,6 +4,7 @@ import { GmailLabel, Settings, del, errMsg, get, post, put } from "../api";
 import { AsyncButton, Badge, ConfirmDialog, ErrorNote } from "../components";
 import { useToast } from "../toast";
 import { useApp } from "../App";
+import { PushState, disablePush, enablePush, pushState } from "../push";
 
 /** Shared state handed to the prop-driven section components. */
 interface IngestionProps {
@@ -380,6 +381,88 @@ export function GmailConnect({
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+const PUSH_STATE_TEXT: Record<PushState, string> = {
+  on: "On for this device.",
+  off: "Off for this device.",
+  denied:
+    "Notifications are blocked for this site. Allow them in the browser / system " +
+    "settings, then reload.",
+  "needs-install":
+    "On iPhone and iPad, notifications work only in the installed app: tap Share → " +
+    "Add to Home Screen, open MailTriage from the Home Screen, then turn them on here.",
+  unsupported: "This browser doesn't support push notifications.",
+};
+
+/** Web Push for the current browser / installed app (per device). */
+function DevicePushSection() {
+  const toast = useToast();
+  const [state, setState] = useState<PushState | null>(null);
+  const reload = () => pushState().then(setState, () => setState("unsupported"));
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const run = async (fn: () => Promise<void>, ok: string) => {
+    try {
+      await fn();
+      toast.success(ok);
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+    await reload();
+  };
+
+  return (
+    <div className="settings-section">
+      <h3>
+        Notifications on this device{" "}
+        {state && (
+          <Badge tone={state === "on" ? "ok" : state === "denied" ? "error" : "neutral"}>
+            {state === "needs-install" ? "install app" : state}
+          </Badge>
+        )}
+      </h3>
+      <p className="sub">
+        Digests with <b>In-app</b> delivery show up in the Digests inbox and are pushed as a
+        system notification to every device turned on here. Tapping it opens the digest.
+      </p>
+      {state && <p>{PUSH_STATE_TEXT[state]}</p>}
+      <div className="head-actions">
+        {state === "off" && (
+          <AsyncButton
+            className="primary"
+            onClick={() => run(enablePush, "Notifications turned on")}
+          >
+            Turn on
+          </AsyncButton>
+        )}
+        {state === "on" && (
+          <>
+            <AsyncButton
+              onClick={async () => {
+                try {
+                  const r = await post<{ sent: number; removed: number; errors: string[] }>(
+                    "/push/test",
+                  );
+                  if (r.sent > 0) toast.success(`Test sent to ${r.sent} device(s)`);
+                  else toast.error(r.errors[0] ?? "No device accepted the notification");
+                } catch (e) {
+                  toast.error(errMsg(e));
+                }
+              }}
+            >
+              Send test notification
+            </AsyncButton>
+            <AsyncButton onClick={() => run(disablePush, "Notifications turned off")}>
+              Turn off
+            </AsyncButton>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -815,6 +898,7 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+      {tab === "notifications" && <DevicePushSection />}
 
       {tab === "security" && <AccessSection />}
 

@@ -126,6 +126,14 @@ Dockerfile multi-stage: node build → python runtime
 - **Stall recovery**: `stall_checker` resets emails stuck in `processing` longer than `llm_classify_timeout + 30 s` back to `pending`.
 - **Reclassify is async**: `POST /emails/{id}/reclassify` returns the email in `pending` status immediately; the queue handles re-classification. All previous actions are wiped.
 - **System labels**: Important, Starred, Spam are seeded by migration `c7f3a9b2e541` with `is_system=True`. Tests that assert on user-created labels must filter `is_system=True` rows out.
+- **Digest delivery**: each digest has `notify_telegram` / `notify_inapp` channels. Every
+  run stores a self-contained `DigestRun.content` snapshot (rendered by the in-app Digests
+  inbox, survives email retention). In-app = unread inbox entry + Web Push
+  (`app/services/webpush.py`, hand-rolled RFC 8291/8292 over httpx, endpoint allowlist). A
+  run succeeds if any channel delivered; per-channel failures go to `run.error`.
+- **PWA / deep links**: `frontend/public/{manifest.webmanifest,sw.js}`. The SW has no fetch
+  handler (no caching behind Cloudflare Access). Links that may pass through an Access
+  re-login use `/?open=<route>` (see `frontend/src/deeplink.ts`), not `/#<route>`.
 - **Gmail scope**: only messages whose Gmail label IDs intersect `poll_scope_labels` (configurable) are ingested. `SENT`, `DRAFT`, `TRASH`, `SPAM`, `CHAT` are always excluded.
 
 ## Docker

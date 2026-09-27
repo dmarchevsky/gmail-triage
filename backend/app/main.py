@@ -22,6 +22,7 @@ from app.api import (
     label_routes,
     llm_routes,
     poller_routes,
+    push_routes,
     rule_routes,
     settings_routes,
     status,
@@ -86,6 +87,12 @@ async def lifespan(app: FastAPI):
     log.info("shutdown")
 
 
+_NO_CACHE = {"Cache-Control": "no-cache"}
+_REVALIDATE_FILES = {"sw.js", "manifest.webmanifest", "index.html"}
+# Not in every Python's mimetypes table.
+_MEDIA_TYPES = {".webmanifest": "application/manifest+json"}
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="MailTriage", version="0.1.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url="/api/v1/openapi.json")
@@ -116,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(email_routes.router, prefix=api_prefix)
     app.include_router(feedback_routes.router, prefix=api_prefix)
     app.include_router(digest_routes.router, prefix=api_prefix)
+    app.include_router(push_routes.router, prefix=api_prefix)
     app.include_router(admin_routes.router, prefix=api_prefix)
 
     static_dir: Path = get_config().static_dir
@@ -127,8 +135,13 @@ def create_app() -> FastAPI:
             candidate = static_dir / full_path
             if full_path and candidate.is_file() and candidate.resolve().is_relative_to(
                     static_dir.resolve()):
+                name = candidate.name
+                if name in _REVALIDATE_FILES:
+                    # The service worker / manifest must never be served stale.
+                    return FileResponse(candidate, headers=_NO_CACHE,
+                                        media_type=_MEDIA_TYPES.get(candidate.suffix))
                 return FileResponse(candidate)
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(static_dir / "index.html", headers=_NO_CACHE)
 
     return app
 

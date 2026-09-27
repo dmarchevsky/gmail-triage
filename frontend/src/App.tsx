@@ -26,15 +26,20 @@ import Categories from "./pages/Categories";
 import Labels from "./pages/Labels";
 import Rules from "./pages/Rules";
 import Digests from "./pages/Digests";
+import DigestRunPage from "./pages/DigestRun";
 import FeedbackQueue from "./pages/FeedbackQueue";
 import SettingsPage from "./pages/Settings";
 import Wizard from "./pages/Wizard";
+import { syncPush } from "./push";
 
 interface AppContextValue {
   status: StatusResponse | null;
   settings: Settings | null;
   session: SessionInfo | null;
   refresh: () => Promise<void>;
+  /** Digest runs delivered in-app and not yet opened. */
+  unreadDigests: number;
+  refreshUnread: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue>({
@@ -42,6 +47,8 @@ const AppContext = createContext<AppContextValue>({
   settings: null,
   session: null,
   refresh: async () => {},
+  unreadDigests: 0,
+  refreshUnread: async () => {},
 });
 
 export const useApp = () => useContext(AppContext);
@@ -156,7 +163,7 @@ function SidebarStatus() {
 }
 
 function Shell() {
-  const { settings } = useApp();
+  const { settings, unreadDigests } = useApp();
   const toast = useToast();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
@@ -184,6 +191,18 @@ function Shell() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A notification clicked while the app is already open: the service worker
+  // focuses this window and asks it to navigate.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      const path = e.data?.type === "open" ? e.data.path : null;
+      if (typeof path === "string" && path.startsWith("/")) navigate(path);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [navigate]);
+
   const toggleCollapsed = () =>
     setCollapsed((c) => {
       localStorage.setItem("sidebarCollapsed", c ? "0" : "1");
@@ -209,6 +228,7 @@ function Shell() {
           onClick={() => setNavOpen((o) => !o)}
         >
           ☰
+          {unreadDigests > 0 && <span className="unread-dot" aria-label="Unread digests" />}
         </button>
         <span className="mobile-title">MailTriage</span>
       </div>
@@ -253,6 +273,11 @@ function Shell() {
           </NavLink>
           <NavLink to="/digests" title="Digests">
             <Send size={16} /><span className="nav-label">Digests</span>
+            {unreadDigests > 0 && (
+              <span className="nav-count" title={`${unreadDigests} unread`}>
+                {unreadDigests > 99 ? "99+" : unreadDigests}
+              </span>
+            )}
           </NavLink>
           <NavLink to="/feedback" title="Feedback">
             <MessageCircle size={16} /><span className="nav-label">Feedback</span>
@@ -273,6 +298,7 @@ function Shell() {
           <Route path="/labels" element={<Labels />} />
           <Route path="/rules" element={<Rules />} />
           <Route path="/digests" element={<Digests />} />
+          <Route path="/digests/runs/:runId" element={<DigestRunPage />} />
           <Route path="/feedback" element={<FeedbackQueue />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/wizard" element={<Wizard />} />
@@ -288,12 +314,22 @@ export default function App() {
   const authed = session.kind === "ok";
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [unreadDigests, setUnreadDigests] = useState(0);
 
-  // Heartbeat: status only. Settings change only on explicit user save, so the
-  // 15s poll below uses this rather than refetching /settings every tick.
-  const refreshStatus = useCallback(async () => {
-    setStatus(await get<StatusResponse>("/status"));
+  const refreshUnread = useCallback(async () => {
+    try {
+      setUnreadDigests((await get<{ unread: number }>("/digests/runs/unread-count")).unread);
+    } catch {
+      /* keep the last count */
+    }
   }, []);
+
+  // Heartbeat: status + unread digests. Settings change only on explicit user
+  // save, so the 15s poll below uses this rather than refetching /settings.
+  const refreshStatus = useCallback(async () => {
+    const [s] = await Promise.all([get<StatusResponse>("/status"), refreshUnread()]);
+    setStatus(s);
+  }, [refreshUnread]);
 
   const refresh = useCallback(async () => {
     await refreshStatus();
@@ -317,6 +353,7 @@ export default function App() {
   useEffect(() => {
     if (!authed) return;
     refresh(); // initial load: status + settings
+    syncPush().catch(() => {}); // heal this device's push subscription
     const id = setInterval(refreshStatus, 15000); // heartbeat: status only
     return () => clearInterval(id);
   }, [authed, refresh, refreshStatus]);
@@ -326,7 +363,11 @@ export default function App() {
     return <AccessDenied status={session.status} info={session.info} />;
 
   return (
-    <AppContext.Provider value={{ status, settings, session: session.info, refresh }}>
+    <AppContext.Provider
+      value={{
+        status, settings, session: session.info, refresh, unreadDigests, refreshUnread,
+      }}
+    >
       <ToastProvider>
         <HashRouter>
           <Shell />

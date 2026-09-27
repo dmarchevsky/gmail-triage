@@ -15,6 +15,9 @@ from app.models import Setting
 SECRET_KEYS = {
     "telegram_bot_token",
     "gmail_client_secret_json",
+    # Internal (not in DEFAULTS, so never listed/updatable via /settings):
+    # generated on first use by services/webpush.py.
+    "webpush_vapid_private_key",
 }
 
 # Summarization depth → the setting key holding that depth's prompt.

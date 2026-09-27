@@ -82,6 +82,18 @@ export function Badge({
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
+/** Badge tone for a digest run status. */
+export const runTone = (s: string): "ok" | "error" | "dry" | "info" | "neutral" =>
+  s === "running"
+    ? "info"
+    : s === "success"
+      ? "ok"
+      : s === "error"
+        ? "error"
+        : s === "dry_run"
+          ? "dry"
+          : "neutral";
+
 // Non-label action → badge tone. Labels are rendered as colored LabelPills;
 // every other action gets a distinct, tone-coded badge.
 const ACTION_TONE: Record<string, "ok" | "warn" | "error" | "neutral" | "info"> = {
