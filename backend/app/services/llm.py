@@ -65,8 +65,13 @@ def resolve_llm_target(settings: dict[str, Any] | None = None) -> tuple[str, str
     return base_url, model
 
 
-def _client(base_url: str, timeout: float) -> AsyncOpenAI:
-    return AsyncOpenAI(base_url=base_url, api_key="not-needed", timeout=timeout,
+def resolve_llm_api_key(settings: dict[str, Any] | None = None) -> str:
+    """API key for the endpoint; local keyless servers ignore the placeholder."""
+    return (settings or {}).get("llm_api_key") or "not-needed"
+
+
+def _client(base_url: str, timeout: float, api_key: str = "not-needed") -> AsyncOpenAI:
+    return AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout,
                        max_retries=0)
 
 
@@ -81,7 +86,7 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
     on unparseable/invalid output, then LLMInvalidOutput.
     """
     base_url, model = resolve_llm_target(settings)
-    client = _client(base_url, timeout)
+    client = _client(base_url, timeout, resolve_llm_api_key(settings))
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -214,7 +219,7 @@ async def chat_text(system: str, user: str, timeout: float,
     reasoning_content, which is where these models draft their final answer.
     """
     base_url, model = resolve_llm_target(settings)
-    client = _client(base_url, timeout)
+    client = _client(base_url, timeout, resolve_llm_api_key(settings))
     kwargs: dict[str, Any] = {}
     if max_tokens is not None and max_tokens > 0:
         kwargs["max_tokens"] = max_tokens
@@ -284,20 +289,27 @@ def _parse_against_schema(raw: str, schema: dict) -> dict | None:
     return data
 
 
+async def list_models(base_url: str, api_key: str, timeout: float = 10) -> list[str]:
+    """Sorted model ids from the endpoint's GET /models. Raises on any failure."""
+    client = _client(base_url, timeout, api_key)
+    try:
+        models = await client.models.list()
+        return sorted(m.id for m in models.data)
+    finally:
+        await client.close()
+
+
 async def health_probe(settings: dict[str, Any] | None = None,
                        timeout: float = 10) -> dict:
     base_url, model = resolve_llm_target(settings)
-    client = _client(base_url, timeout)
     try:
-        models = await client.models.list()
+        models = await list_models(base_url, resolve_llm_api_key(settings), timeout)
         app_state.llm_status = "ok"
         return {"ok": True, "base_url": base_url,
-                "models": [m.id for m in models.data][:5], "configured_model": model}
+                "models": models[:5], "configured_model": model}
     except Exception as e:  # noqa: BLE001 — any failure means unreachable
         app_state.llm_status = "unreachable"
         return {"ok": False, "base_url": base_url, "error": str(e)[:300]}
-    finally:
-        await client.close()
 
 
 async def fetch_context_length(settings: dict[str, Any] | None = None,
@@ -309,11 +321,13 @@ async def fetch_context_length(settings: dict[str, Any] | None = None,
     manual `llm_max_context_tokens` setting stays authoritative in that case.
     """
     base_url, _ = resolve_llm_target(settings)
+    api_key = (settings or {}).get("llm_api_key")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     root = base_url.rstrip("/")
     if root.endswith("/v1"):
         root = root[: -len("/v1")]
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
             resp = await client.get(f"{root}/props")
             resp.raise_for_status()
             data = resp.json()

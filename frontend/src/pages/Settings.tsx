@@ -524,6 +524,10 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [telegramToken, setTelegramToken] = useState("");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmModels, setLlmModels] = useState<string[]>([]);
+  const [llmModelsLoading, setLlmModelsLoading] = useState(false);
+  const [llmModelsError, setLlmModelsError] = useState<string | null>(null);
   const [confirmingPurge, setConfirmingPurge] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [detectedContext, setDetectedContext] = useState<number | null>(null);
@@ -537,6 +541,28 @@ export default function SettingsPage() {
       .then((r) => setDetectedContext(r.detected))
       .catch(() => setDetectedContext(null));
   }, []);
+
+  // Model picker options from the endpoint's GET /models. Unsaved draft
+  // URL/key are sent as overrides so the list reflects what's being edited.
+  const loadModels = async (baseUrl = "", apiKey = "") => {
+    setLlmModelsLoading(true);
+    try {
+      const r = await post<{ ok: boolean; models?: string[]; error?: string }>(
+        "/llm/models",
+        { base_url: baseUrl, api_key: apiKey },
+      );
+      setLlmModels(r.models ?? []);
+      setLlmModelsError(r.ok ? null : (r.error ?? "unknown error"));
+    } catch (e) {
+      setLlmModels([]);
+      setLlmModelsError(errMsg(e));
+    } finally {
+      setLlmModelsLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (tab === "processing") loadModels();
+  }, [tab]);
 
   if (!settings) return <p>Loading…</p>;
 
@@ -588,6 +614,11 @@ export default function SettingsPage() {
         return null;
     }
   };
+
+  // Keep the saved model selectable even if the endpoint no longer lists it.
+  const modelValue = draft.llm_model !== undefined ? draft.llm_model : settings.llm_model;
+  const modelOptions =
+    modelValue && !llmModels.includes(modelValue) ? [modelValue, ...llmModels] : llmModels;
 
   const llmFields: [keyof Settings, string, string][] = [
     ["classify_body_max_chars", "Body budget (chars; classify + summarize)", "2000"],
@@ -680,11 +711,66 @@ export default function SettingsPage() {
                 />
               </label>
               <label>
-                Model name (ignored by single-model llama.cpp)
+                API key (optional; empty for keyless local servers)
                 <input
-                  value={draft.llm_model !== undefined ? draft.llm_model : settings.llm_model}
-                  onChange={(e) => setDraft({ ...draft, llm_model: e.target.value })}
+                  type="password"
+                  autoComplete="off"
+                  placeholder={
+                    settings.llm_api_key_configured ? "configured — leave blank to keep" : ""
+                  }
+                  value={llmApiKey}
+                  onChange={(e) => setLlmApiKey(e.target.value)}
                 />
+                {settings.llm_api_key_configured && (
+                  <span className="sub">
+                    Key saved.{" "}
+                    <button
+                      type="button"
+                      className="link-btn"
+                      onClick={() => saveValues({ llm_api_key: "" })}
+                    >
+                      Clear
+                    </button>
+                  </span>
+                )}
+              </label>
+              <label>
+                Model
+                <span className="input-action">
+                  <select
+                    disabled={llmModelsLoading}
+                    value={modelValue}
+                    onChange={(e) => setDraft({ ...draft, llm_model: e.target.value })}
+                  >
+                    <option value="">(server default)</option>
+                    {modelOptions.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    title="Reload models (uses the base URL and API key above)"
+                    aria-label="Reload models"
+                    disabled={llmModelsLoading}
+                    onClick={() =>
+                      loadModels(
+                        draft.llm_base_url !== undefined
+                          ? draft.llm_base_url
+                          : settings.llm_base_url,
+                        llmApiKey,
+                      )
+                    }
+                  >
+                    ↻
+                  </button>
+                </span>
+                {llmModelsLoading ? (
+                  <span className="sub">Loading models…</span>
+                ) : llmModelsError ? (
+                  <span className="sub">Couldn't load models: {llmModelsError}</span>
+                ) : null}
               </label>
               {llmFields.map(([key, label, placeholder]) => (
                 <label key={key}>
@@ -753,13 +839,14 @@ export default function SettingsPage() {
                   const values: Record<string, unknown> = {};
                   if (draft.llm_base_url !== undefined) values.llm_base_url = draft.llm_base_url;
                   if (draft.llm_model !== undefined) values.llm_model = draft.llm_model;
+                  if (llmApiKey) values.llm_api_key = llmApiKey;
                   for (const [key] of llmFields)
                     if (draft[key] !== undefined) values[key] = Number(draft[key]);
                   if (draft.llm_synthesis_temperature !== undefined)
                     values.llm_synthesis_temperature = Number(draft.llm_synthesis_temperature);
                   if (draft.llm_synthesis_max_tokens !== undefined)
                     values.llm_synthesis_max_tokens = Number(draft.llm_synthesis_max_tokens);
-                  saveValues(values);
+                  saveValues(values).then(() => setLlmApiKey(""));
                 }}
               >
                 Save LLM settings

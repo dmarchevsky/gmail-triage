@@ -15,6 +15,7 @@ from app.models import Setting
 SECRET_KEYS = {
     "telegram_bot_token",
     "gmail_client_secret_json",
+    "llm_api_key",
     # Internal (not in DEFAULTS, so never listed/updatable via /settings):
     # generated on first use by services/webpush.py.
     "webpush_vapid_private_key",
@@ -34,6 +35,7 @@ DEFAULTS: dict[str, Any] = {
     "classify_body_max_chars": 2000,
     "llm_base_url": "",  # empty -> use env LLM_BASE_URL
     "llm_model": "",
+    "llm_api_key": "",  # empty -> keyless local endpoint
     "llm_classify_timeout_seconds": 120,
     "llm_digest_timeout_seconds": 300,
     "llm_max_concurrency": 1,

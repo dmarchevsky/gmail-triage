@@ -759,6 +759,18 @@ tr.clickable {
   opacity: 0.8;
 }
 
+/* Input with a trailing action button (e.g. model picker + reload). */
+.input-action {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.input-action > select,
+.input-action > input {
+  flex: 1;
+  min-width: 0;
+}
+
 @media (max-width: 720px) {
   .select-banner {
     display: flex; /* always visible on mobile */

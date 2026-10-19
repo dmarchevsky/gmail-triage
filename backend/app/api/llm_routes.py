@@ -1,6 +1,7 @@
 """LLM health test, Telegram test, manual classification trigger, live queue."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,31 @@ async def telegram_test(session: Session = Depends(get_session)) -> dict:
 async def llm_test(session: Session = Depends(get_session)) -> dict:
     settings = settings_service.get_all_settings(session, redact=False)
     return await llm.health_probe(settings)
+
+
+class ModelsRequest(BaseModel):
+    """Unsaved draft values from the Settings form; empty → stored setting / env."""
+    base_url: str = ""
+    api_key: str = ""
+
+
+@router.post("/llm/models")
+async def llm_models(body: ModelsRequest | None = None,
+                     session: Session = Depends(get_session)) -> dict:
+    """All model ids served by the endpoint, for the Settings model picker."""
+    settings = settings_service.get_all_settings(session, redact=False)
+    body = body or ModelsRequest()
+    if body.base_url.strip():
+        settings["llm_base_url"] = body.base_url.strip()
+    if body.api_key:
+        settings["llm_api_key"] = body.api_key
+    base_url, model = llm.resolve_llm_target(settings)
+    try:
+        models = await llm.list_models(base_url, llm.resolve_llm_api_key(settings))
+    except Exception as e:  # noqa: BLE001 — any failure is reported, not raised
+        return {"ok": False, "base_url": base_url, "error": str(e)[:300]}
+    return {"ok": True, "base_url": base_url, "models": models,
+            "configured_model": settings.get("llm_model") or ""}
 
 
 @router.get("/llm/context")

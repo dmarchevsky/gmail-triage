@@ -332,6 +332,67 @@ def test_llm_health_endpoint(auth_client):
     assert resp.json()["models"] == ["qwen"]
 
 
+def _models_payload(*ids: str) -> dict:
+    return {"object": "list", "data": [{"id": i, "object": "model", "created": 0,
+                                        "owned_by": "me"} for i in ids]}
+
+
+def test_llm_api_key_is_secret(auth_client, db_session):
+    from app.models import Setting
+
+    resp = auth_client.put("/api/v1/settings", json={"llm_api_key": "sk-secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["llm_api_key_configured"] is True
+    assert "llm_api_key" not in body
+    stored = db_session.get(Setting, "llm_api_key").value
+    assert stored and "sk-secret" not in stored
+
+    auth_client.put("/api/v1/settings", json={"llm_api_key": ""})
+    assert auth_client.get("/api/v1/settings").json()["llm_api_key_configured"] is False
+
+
+@respx.mock
+def test_llm_api_key_sent_on_classification(auth_client, seeded):
+    auth_client.put("/api/v1/settings", json={"llm_api_key": "sk-secret"})
+    mock_gmail_full(seeded)
+    chat = respx.post(CHAT_URL).mock(return_value=llm_response({
+        "category": "none", "confidence": 0.5, "rationale": "r", "summary": ""}))
+    auth_client.post("/api/v1/classify/run-now")
+    assert chat.calls.last.request.headers["authorization"] == "Bearer sk-secret"
+
+
+@respx.mock
+def test_llm_models_lists_all_sorted(auth_client):
+    respx.get(f"{LLM_BASE}/models").respond(
+        200, json=_models_payload("zeta", "alpha", "mid", "b", "c", "d"))
+    auth_client.put("/api/v1/settings", json={"llm_model": "mid"})
+    body = auth_client.post("/api/v1/llm/models").json()
+    assert body["ok"] is True
+    assert body["models"] == ["alpha", "b", "c", "d", "mid", "zeta"]
+    assert body["configured_model"] == "mid"
+
+
+@respx.mock
+def test_llm_models_uses_draft_overrides(auth_client):
+    route = respx.get("http://other:9000/v1/models").respond(
+        200, json=_models_payload("gpt-x"))
+    body = auth_client.post("/api/v1/llm/models", json={
+        "base_url": "http://other:9000/v1", "api_key": "sk-draft"}).json()
+    assert body["models"] == ["gpt-x"]
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-draft"
+
+
+@respx.mock
+def test_llm_models_unreachable(auth_client):
+    import httpx
+    respx.get(f"{LLM_BASE}/models").mock(side_effect=httpx.ConnectError("down"))
+    resp = auth_client.post("/api/v1/llm/models")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert resp.json()["error"]
+
+
 # ── per-email reclassify ─────────────────────────────────────────────────────
 
 @respx.mock
