@@ -1,0 +1,8 @@
+# Build the app image from this checkout instead of pulling the released one.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# or, for a dev machine, put this in .env so plain `docker compose` builds:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml
+services:
+  mailtriage:
+    build: .
+    image: mailtriage:dev

@@ -37,12 +37,29 @@ curl -fsS http://localhost:8080/api/v1/status        # expect HTTP 200
 docker compose logs --tail=25 mailtriage             # expect "startup_complete"
 ```
 
-### Commit & push workflow
+### Commit, release & push workflow
+
+Every push to `main` is a semver release (see `CHANGELOG.md`).
 
 1. All gates above must pass (backend, frontend, docker boot).
-2. Commit and push **only after explicit user confirmation**.
-3. After pushing, verify the CI build goes green (`gh run list` / `gh run watch`) — a red
-   build blocks shipping. CI runs the backend and frontend gates on every push to `main`.
+2. Commit and release **only after explicit user confirmation**. Commit messages must be
+   [Conventional Commits](https://www.conventionalcommits.org/): `feat:` (minor), `fix:`
+   (patch), `feat!:` or a `BREAKING CHANGE:` footer (major), and `refactor:`/`docs:`/`chore:`
+   (patch, listed under "Other"). The subject becomes the CHANGELOG line, so write it for
+   users.
+3. Don't `git push` directly. Run `scripts/release.py` (`--dry-run` to preview). It infers
+   the bump from commits since the last `v*` tag, writes the CHANGELOG entry (hand-written
+   text under `## [Unreleased]` wins), bumps `backend/app/__init__.py` (the single source
+   of the version) and `frontend/package*.json`, then commits `chore(release): vX.Y.Z`,
+   tags it, and runs `git push --atomic origin main vX.Y.Z`.
+4. Verify that both the CI run and the Release run go green (`gh run list` /
+   `gh run watch`). The Release workflow (`.github/workflows/release.yml`, on `v*` tags):
+   - re-runs the CI gates;
+   - checks the tag against `__version__`;
+   - pushes `ghcr.io/dmarchevsky/gmail-triage:{X.Y.Z,X.Y,X,latest}`;
+   - creates the GitHub Release from the CHANGELOG entry.
+
+   A red run blocks shipping.
 
 ## Local development
 
@@ -138,8 +155,15 @@ Dockerfile multi-stage: node build → python runtime
 
 ## Docker
 
+`docker-compose.yml` runs the released image
+`ghcr.io/dmarchevsky/gmail-triage:${MAILTRIAGE_VERSION:-latest}`. Prod pins
+`MAILTRIAGE_VERSION` in its `.env`. `docker-compose.build.yml` overlays a source build
+(`image: mailtriage:dev`). This dev machine's `.env` sets
+`COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.override.yml`,
+so plain `docker compose build` builds from the checkout here.
+
 ```bash
-docker compose build && docker compose up -d   # rebuild + restart
+docker compose build && docker compose up -d   # rebuild + restart (dev: from source)
 docker compose logs -f mailtriage              # tail app logs
 ```
 

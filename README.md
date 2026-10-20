@@ -39,8 +39,14 @@ cp .env.example .env
 #   CLOUDFLARE_TUNNEL_TOKEN / CF_ACCESS_*   # see docs/remote-access.md
 #   (or, for a local-only trial: DEV_AUTH=true and no COMPOSE_PROFILES)
 #   LLM_BASE_URL=http://host.docker.internal:8081/v1   # your llama.cpp
-docker compose up -d --build
+#   MAILTRIAGE_VERSION=1.0.0   # optional pin; empty = latest
+docker compose up -d
 ```
+
+Compose pulls the released image `ghcr.io/dmarchevsky/gmail-triage`; see
+[CHANGELOG.md](CHANGELOG.md) or GitHub Releases for versions. To build from the
+checkout instead, add `-f docker-compose.yml -f docker-compose.build.yml` (or set
+`COMPOSE_FILE` in `.env`, see `.env.example`).
 
 Compose runs two services: the app and a bundled PostgreSQL (not exposed on
 the host; `docker compose exec postgres psql -U mailtriage` to inspect).
@@ -246,6 +252,19 @@ empirical counts.
 
 ## 6. Operations
 
+### Upgrade & rollback
+
+Set `MAILTRIAGE_VERSION` in `.env` to the release you want (see
+[CHANGELOG.md](CHANGELOG.md)), then:
+
+```bash
+docker compose pull mailtriage && docker compose up -d
+```
+
+Migrations run on startup and only move forward, so take a backup (below)
+before upgrading across versions. Rolling back past a schema change means
+restoring that backup.
+
 ### Backup & restore
 
 State lives in PostgreSQL (`mailtriage-pg` volume); encrypted tokens are
@@ -311,6 +330,12 @@ cd frontend && npm install && npm run dev    # Vite dev server proxies /api
 
 Schema changes: edit `app/models.py`, then
 `alembic revision --autogenerate -m "..."` (migrations run on startup).
+
+Releases: commits follow [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat:`, `fix:`, `feat!:` …). `scripts/release.py` infers the semver bump from the
+commits since the last tag, writes the CHANGELOG entry, then commits, tags and pushes.
+`--dry-run` previews it. The pushed `v*` tag triggers `.github/workflows/release.yml`,
+which runs the CI gates, publishes the image to GHCR and creates the GitHub Release.
 
 ## 8. Security checklist
 

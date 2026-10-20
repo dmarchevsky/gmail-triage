@@ -1,7 +1,8 @@
 services:
   mailtriage:
-    build: .
-    image: mailtriage:latest
+    # Released image (see CHANGELOG.md). Pin MAILTRIAGE_VERSION in .env for
+    # reproducible upgrades/rollbacks; build from source with docker-compose.build.yml.
+    image: ghcr.io/dmarchevsky/gmail-triage:${MAILTRIAGE_VERSION:-latest}
     # Loopback only: remote access goes through the cloudflared tunnel below.
     ports: ["127.0.0.1:8080:8080"]
     environment:

@@ -1251,6 +1251,12 @@ label.checkbox input {
   padding-top: 0.6rem;
 }
 
+.sidebar-version {
+  padding: 0.2rem 0.3rem 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 .sidebar-status a {
   display: flex;
   align-items: center;

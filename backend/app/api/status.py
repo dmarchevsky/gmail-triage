@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import __version__
 from app.db import get_session
 from app.models import Email, EmailStatus, GmailAuth, Rule
 from app.services import settings_service
@@ -28,7 +29,7 @@ def get_status(session: Session = Depends(get_session)) -> dict:
     gmail_connected = gmail_row is not None
     return {
         "ok": True,
-        "version": "0.1.0",
+        "version": __version__,
         "gmail": {
             "connected": gmail_connected,
             "email": app_state.gmail_email,

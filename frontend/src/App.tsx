@@ -158,6 +158,7 @@ function SidebarStatus() {
           Rules: {rules.live} live · {rules.dry} dry
         </span>
       </NavLink>
+      <span className="sidebar-version">MailTriage v{status.version}</span>
     </div>
   );
 }

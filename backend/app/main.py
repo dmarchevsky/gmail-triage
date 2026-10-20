@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from app import cf_access
+from app import __version__, cf_access
 from app.api import (
     admin_routes,
     auth_routes,
@@ -94,7 +94,7 @@ _MEDIA_TYPES = {".webmanifest": "application/manifest+json"}
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="MailTriage", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="MailTriage", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url="/api/v1/openapi.json")
     app.add_middleware(AuthMiddleware)
 
