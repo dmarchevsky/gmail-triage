@@ -86,7 +86,7 @@ and either the full Cloudflare Access config (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCES
   routers and the `lifespan` that runs migrations and launches the background tasks.
 - **Data flow**: `poller_loop` (Gmail `historyId` sync, scope-filtered) ingests mail as
   `pending` → `queue_loop` classifies one email at a time via `classifier.classify_one()`
-  (ignore-senders → hard rules → LLM) → the rules engine applies label/read/archive/trash
+  (ignore-senders → pinned senders (`Category.sender_patterns`) → hard rules → model) → the rules engine applies label/read/archive/trash
   actions (each `Rule` carries its own `dry_run` flag). Digests are generated and delivered
   to Telegram on an APScheduler cron schedule.
 - **LLM**: `app/services/llm.py` uses the `openai` SDK against a **local OpenAI-compatible**

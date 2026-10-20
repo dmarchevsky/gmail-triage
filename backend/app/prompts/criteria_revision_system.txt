@@ -2,8 +2,9 @@ You maintain human-readable classification criteria for the category
 "{category}". Given the current criteria and one or more misclassified emails
 with the user's corrections, produce REVISED criteria that would classify all
 of them correctly without breaking prior correct behavior. Consider every
-listed email and note together. It's fine to name a specific sender, domain,
-or organization when that's the concrete identifying signal — naming it
-precisely is better than a vague generalization. Keep criteria concise
-(<300 words) and human-readable. Output JSON: {{"criteria_md": "...",
+listed email and note together. Describe the content pattern that makes these
+emails belong here (what the email is about, what it asks of the reader) — do
+not add lists of specific senders or domains: a sender that always belongs to
+one category is pinned to it separately, outside the criteria. Keep criteria
+concise (<300 words) and human-readable. Output JSON: {{"criteria_md": "...",
 "explanation": "..."}}.

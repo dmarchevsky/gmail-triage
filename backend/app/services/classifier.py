@@ -197,7 +197,7 @@ def _mark_failed(session: Session, email: Email, reason: str, error: str) -> Non
 
 
 def _mark_classified(email: Email, category: Category | None, confidence: float,
-                     rationale: str, model: str, summary: str | None) -> None:
+                     rationale: str, model: str | None, summary: str | None) -> None:
     email.classification_id = category.id if category else None
     email.confidence = max(0.0, min(1.0, float(confidence)))
     email.rationale = rationale[:2000]
@@ -289,13 +289,42 @@ async def _summarize_email(email: Email, body: str, settings: dict) -> str | Non
         return None
 
 
+def pinned_category(categories: list[Category],
+                    sender: str) -> tuple[Category, str] | None:
+    """(category, pattern) when the sender is pinned to an enabled category."""
+    for category in categories:
+        for pattern in category.sender_patterns or []:
+            if sender_matches([pattern], sender):
+                return category, pattern
+    return None
+
+
+async def _classify_pinned(session: Session, client: GmailClient, email: Email,
+                           category: Category, pattern: str, settings: dict) -> None:
+    """Pinned sender: category without the model. Still summarized (best
+    effort) so pinned mail reads the same as model-classified mail in digests."""
+    summary = None
+    wants_summary = not (settings.get("classifier_backend") == "decider"
+                         and settings.get("decider_summary_source") == "snippet")
+    if wants_summary:
+        try:
+            body = await fetch_body(session, client, email,
+                                    store_bodies=bool(settings.get("store_bodies")))
+        except GmailNotFound:
+            body = None
+        session.commit()  # release the body-hash write before the LLM await
+        if body is not None:
+            summary = await _summarize_email(email, body, settings)
+    _mark_classified(email, category, 1.0, f"pinned sender: {pattern}", None, summary)
+
+
 async def classify_one(session: Session, client: GmailClient, email: Email,
                        categories: list[Category], rules: list,
                        settings: dict) -> Email:
-    """Classify a single email (ignore list → hard rules → LLM), then run the
-    rule engine. Sets processing state before any I/O. Raises LLMUnavailable
-    on connection failure; leaves status pending when there is nothing to
-    classify against."""
+    """Classify a single email (ignore list → pinned senders → hard rules →
+    model), then run the rule engine. Sets processing state before any I/O.
+    Raises LLMUnavailable on connection failure; leaves status pending when
+    there is nothing to classify against."""
     from app.services import rules as rules_engine
 
     email.status = EmailStatus.processing.value
@@ -307,10 +336,13 @@ async def classify_one(session: Session, client: GmailClient, email: Email,
         session.commit()
         return email
 
-    hard = next((r for r in rules if rules_engine.is_hard_rule(r)
-                 and sender_matches([r.match_sender_pattern], email.sender or "")),
-                None)
-    if hard is not None:
+    pin = pinned_category(categories, email.sender or "")
+    hard = None if pin is not None else next(
+        (r for r in rules if rules_engine.is_hard_rule(r)
+         and sender_matches([r.match_sender_pattern], email.sender or "")), None)
+    if pin is not None:
+        await _classify_pinned(session, client, email, *pin, settings)
+    elif hard is not None:
         email.confidence = 1.0
         email.rationale = f"hard rule: {hard.name}"
         email.classified_at = datetime.now(UTC)

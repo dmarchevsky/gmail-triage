@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.models import Category, CategoryCriteriaHistory, CriteriaSource
+from app.services import pins
 from app.services.audit import audit
 
 router = APIRouter(prefix="/categories")
@@ -17,6 +18,20 @@ class CategoryIn(BaseModel):
     description: str | None = None
     criteria_md: str = ""
     enabled: bool = True
+    sender_patterns: list[str] | None = None  # None on update = leave unchanged
+
+
+def _checked_patterns(session: Session, body: CategoryIn,
+                      category_id: int | None = None) -> list[str] | None:
+    if body.sender_patterns is None:
+        return None
+    patterns = pins.normalize_patterns(body.sender_patterns)
+    conflict = pins.find_conflict(session, patterns, exclude_category_id=category_id)
+    if conflict is not None:
+        pattern, other = conflict
+        raise HTTPException(status_code=409,
+                            detail=f"Sender '{pattern}' is already pinned to '{other.name}'")
+    return patterns
 
 
 def serialize(c: Category) -> dict:
@@ -27,6 +42,7 @@ def serialize(c: Category) -> dict:
         "criteria_md": c.criteria_md,
         "criteria_version": c.criteria_version,
         "enabled": c.enabled,
+        "sender_patterns": c.sender_patterns or [],
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
@@ -51,7 +67,8 @@ def create_category(body: CategoryIn, session: Session = Depends(get_session)) -
         raise HTTPException(status_code=409, detail="Category name already exists")
     category = Category(
         name=body.name, description=body.description,
-        criteria_md=body.criteria_md, enabled=body.enabled, criteria_version=1)
+        criteria_md=body.criteria_md, enabled=body.enabled, criteria_version=1,
+        sender_patterns=_checked_patterns(session, body) or [])
     session.add(category)
     session.flush()
     _record_history(session, category, CriteriaSource.user.value)
@@ -109,7 +126,10 @@ def update_category(category_id: int, body: CategoryIn,
                                                   Category.id != category_id))
     if clash:
         raise HTTPException(status_code=409, detail="Category name already exists")
+    patterns = _checked_patterns(session, body, category_id)
     criteria_changed = body.criteria_md != category.criteria_md
+    if patterns is not None:
+        category.sender_patterns = patterns
     category.name = body.name
     category.description = body.description
     category.enabled = body.enabled

@@ -126,6 +126,7 @@ export interface Category {
   criteria_md: string;
   criteria_version: number;
   enabled: boolean;
+  sender_patterns: string[];
   created_at: string | null;
   updated_at: string | null;
 }

@@ -100,6 +100,9 @@ class Category(Base):
     description: Mapped[str | None] = mapped_column(Text)
     criteria_md: Mapped[str] = mapped_column(Text, default="")
     criteria_version: Mapped[int] = mapped_column(Integer, default=1)
+    # Pinned senders: patterns that always classify into this category, skipping
+    # the model (same matching as the ignore list, see services/matchers.py).
+    sender_patterns: Mapped[list | None] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow,

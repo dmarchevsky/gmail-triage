@@ -44,6 +44,7 @@ function CategoryEditor({
     criteria_md: category?.criteria_md ?? "",
     enabled: category?.enabled ?? true,
   });
+  const [pins, setPins] = useState((category?.sender_patterns ?? []).join("\n"));
   // Optional quick-create of a label + a dry-run rule (new categories only).
   const [palette, setPalette] = useState<ColorSwatch[]>([]);
   const [quick, setQuick] = useState(false);
@@ -80,10 +81,11 @@ function CategoryEditor({
   const save = async () => {
     try {
       let categoryId = category?.id;
+      const body = { ...form, sender_patterns: pins.split("\n") };
       if (category) {
-        await put(`/categories/${category.id}`, form);
+        await put(`/categories/${category.id}`, body);
       } else {
-        const created = await post<Category>("/categories", form);
+        const created = await post<Category>("/categories", body);
         categoryId = created.id;
       }
       if (!category && quick && quickName.trim() && categoryId) {
@@ -150,6 +152,20 @@ function CategoryEditor({
             onChange={(e) => setForm({ ...form, criteria_md: e.target.value })}
             placeholder="Describe in plain language what belongs in this category, e.g.: daily/weekly market commentary newsletters; stock, bond, macro analysis; NOT individual trade confirmations."
           />
+        </label>
+        <label className="span2">
+          Pinned senders (one per line): mail from these senders always lands in this category,
+          without asking the model
+          <textarea
+            rows={3}
+            value={pins}
+            onChange={(e) => setPins(e.target.value)}
+            placeholder={"jobalerts-noreply@linkedin.com\n*@peachjar.com\nusps.com"}
+          />
+          <span className="sub">
+            Full address, a domain (matches anywhere in the From header), or a glob like
+            *@example.com. A sender can be pinned to only one category.
+          </span>
         </label>
         <label className="checkbox span2">
           <input
@@ -504,6 +520,12 @@ export default function Categories() {
                   <b>{c.name}</b>
                 </button>
                 {c.description && <div className="sub">{c.description}</div>}
+                {c.sender_patterns.length > 0 && (
+                  <div className="sub" title={c.sender_patterns.join("\n")}>
+                    {c.sender_patterns.length} pinned sender
+                    {c.sender_patterns.length === 1 ? "" : "s"}
+                  </div>
+                )}
               </td>
               <td data-label="Criteria" className="ellipsis criteria-preview">{c.criteria_md.slice(0, 80)}</td>
               <td data-label="Version">v{c.criteria_version}</td>

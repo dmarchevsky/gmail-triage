@@ -141,6 +141,17 @@ the same step — handy when setting up a new category from scratch.
 Full edit history (criteria versions with diffs) is accessible from the
 category row; any version can be restored.
 
+**Pinned senders**: a sender that always belongs in one category (e.g.
+`jobalerts-noreply@linkedin.com`) can be pinned to it in the category editor, or
+from an email's feedback form ("Always classify … as …"). Pinned mail skips the
+model, gets confidence 1.0 and flows into that category's rules and digests. This
+keeps sender-specific exceptions out of the criteria text. Each sender can be
+pinned to one category only.
+
+To measure the decider on recent mail (optionally with draft criteria or pins in
+an overrides JSON) before changing anything, run inside the app container:
+`python -m app.tools.eval_decider --limit 150 [--overrides draft.json]`.
+
 ### Labels
 
 Labels are Gmail labels that rules apply to emails. They are managed

@@ -1,15 +1,17 @@
 """Feedback capture, listing, and the criteria-revision proposal flow."""
 
+from email.utils import parseaddr
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.api.email_routes import _reset_email_to_pending
 from app.db import get_session
-from app.models import Category, Email, Feedback, FeedbackStatus, ProposalStatus
-from app.services import feedback_service
+from app.models import Category, Email, EmailAction, Feedback, FeedbackStatus, ProposalStatus
+from app.services import feedback_service, pins
 from app.services.audit import audit
 from app.services.llm import LLMError
 
@@ -19,6 +21,9 @@ router = APIRouter()
 class FeedbackIn(BaseModel):
     correct_category_id: int | None = None  # null = "none" is correct
     user_note: str | None = None
+    # Pin the sender's address to correct_category_id instead of revising the
+    # criteria: the feedback is resolved at once and the email is re-queued.
+    pin_sender: bool = False
 
 
 def serialize(f: Feedback, session: Session,
@@ -66,9 +71,12 @@ async def create_feedback(email_id: int, body: FeedbackIn,
     email = session.get(Email, email_id)
     if email is None:
         raise HTTPException(status_code=404, detail="Email not found")
-    if body.correct_category_id is not None \
-            and session.get(Category, body.correct_category_id) is None:
+    correct = session.get(Category, body.correct_category_id) \
+        if body.correct_category_id is not None else None
+    if body.correct_category_id is not None and correct is None:
         raise HTTPException(status_code=404, detail="Category not found")
+    if body.pin_sender:
+        return _pin_from_feedback(session, email, correct, body)
     feedback = Feedback(email_id=email_id,
                         correct_category_id=body.correct_category_id,
                         user_note=body.user_note)
@@ -89,6 +97,29 @@ async def create_feedback(email_id: int, body: FeedbackIn,
     source_category_id = feedback_service.source_category_id_for(feedback)
     if source_category_id is not None:
         feedback_service.schedule_proposal_generation(source_category_id, kind="source")
+    return serialize(feedback, session)
+
+
+def _pin_from_feedback(session: Session, email: Email, correct: Category | None,
+                       body: FeedbackIn) -> dict:
+    if correct is None:
+        raise HTTPException(status_code=400, detail="Choose a category to pin the sender to")
+    _, address = parseaddr(email.sender or "")
+    if not address:
+        raise HTTPException(status_code=400, detail="Email has no sender address to pin")
+    feedback = Feedback(email_id=email.id, correct_category_id=correct.id,
+                        user_note=body.user_note, status=FeedbackStatus.incorporated.value)
+    if email.classification_id not in (None, correct.id):
+        feedback.source_category_id = email.classification_id
+    session.add(feedback)
+    pins.pin_sender(session, correct, address.lower())
+    session.execute(delete(EmailAction).where(EmailAction.email_id == email.id))
+    _reset_email_to_pending(email)
+    session.flush()
+    audit(session, "user", "sender_pinned",
+          {"feedback_id": feedback.id, "email_id": email.id, "sender": address.lower(),
+           "category_id": correct.id})
+    session.commit()
     return serialize(feedback, session)
 
 

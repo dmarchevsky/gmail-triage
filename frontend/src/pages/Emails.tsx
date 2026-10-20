@@ -30,11 +30,15 @@ function FeedbackForm({
 }: {
   email: EmailRow;
   categories: Category[];
-  onDone: () => void;
+  onDone: (requeued: boolean) => void;
 }) {
   const toast = useToast();
   const [categoryId, setCategoryId] = useState<string>("none");
   const [note, setNote] = useState("");
+  const [pin, setPin] = useState(false);
+  const address = (email.sender ?? "").match(/<([^>]+)>/)?.[1] ?? email.sender ?? "";
+  const target = categories.find((c) => String(c.id) === categoryId);
+  const pinning = pin && target !== undefined && address !== "";
 
   return (
     <div className="feedback-form">
@@ -50,11 +54,20 @@ function FeedbackForm({
           ))}
         </select>
       </label>
-      <textarea
-        placeholder="Optional note for the criteria revision (e.g. why this is/isn't MarketNews)"
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-      />
+      {target && address && (
+        <label className="checkbox">
+          <input type="checkbox" checked={pin} onChange={(e) => setPin(e.target.checked)} />
+          Always classify <b>{address}</b> as <b>{target.name}</b> (pin the sender instead of
+          revising criteria)
+        </label>
+      )}
+      {!pinning && (
+        <textarea
+          placeholder="Optional note for the criteria revision (e.g. why this is/isn't MarketNews)"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+      )}
       <button
         className="primary"
         onClick={async () => {
@@ -62,9 +75,14 @@ function FeedbackForm({
             await post(`/emails/${email.id}/feedback`, {
               correct_category_id: categoryId === "none" ? null : Number(categoryId),
               user_note: note || null,
+              pin_sender: pinning,
             });
-            toast.success("Feedback recorded — see the Feedback page for proposals");
-            onDone();
+            toast.success(
+              pinning
+                ? `Pinned ${address} to ${target?.name} — reclassifying`
+                : "Feedback recorded — see the Feedback page for proposals",
+            );
+            onDone(pinning);
           } catch (e) {
             toast.error(errMsg(e));
           }
@@ -271,7 +289,13 @@ function EmailDetail({
           <FeedbackForm
             email={email}
             categories={categories}
-            onDone={() => setFeedbackSent(true)}
+            onDone={(requeued) => {
+              setFeedbackSent(true);
+              if (requeued) {
+                get<EmailRow>(`/emails/${email.id}`).then(setEmail);
+                onChanged();
+              }
+            }}
           />
         )}
       </div>
