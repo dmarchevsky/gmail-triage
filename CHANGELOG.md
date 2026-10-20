@@ -10,6 +10,8 @@ subjects (`feat:` → Features, `fix:` → Fixes). Text written by hand under
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-20
+
 First versioned release. It covers everything built before versioning began.
 
 ### Features
