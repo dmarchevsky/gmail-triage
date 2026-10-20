@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Category, EmailAction, EmailList, EmailRow, StatusResponse, errMsg, get, post } from "../api";
+import {
+  BackendPreview,
+  BackendPreviewSide,
+  Category,
+  EmailAction,
+  EmailList,
+  EmailRow,
+  StatusResponse,
+  errMsg,
+  get,
+  post,
+} from "../api";
 import { AsyncButton, Badge, BulkActionBar, ConfirmDialog, LabelPill, Modal, ActionBadges, actionLabel, conf, fmtDate } from "../components";
 import { useToast } from "../toast";
 
@@ -62,6 +73,68 @@ function FeedbackForm({
         Submit feedback
       </button>
     </div>
+  );
+}
+
+function PreviewSide({ title, side }: { title: string; side: BackendPreviewSide }) {
+  if (!side.ok) {
+    return (
+      <div>
+        <b>{title}</b> <span className="sub">· {side.latency_ms} ms</span>
+        <p className="error">{side.error}</p>
+      </div>
+    );
+  }
+  const probs = Object.entries(side.probabilities ?? {}).slice(0, 4);
+  return (
+    <div>
+      <b>{title}</b>{" "}
+      <span className="sub">
+        · {side.model} · {side.latency_ms} ms
+      </span>
+      <p>
+        <b>{side.category}</b> · {conf(side.confidence ?? null)} confidence
+      </p>
+      {side.rationale && <p className="rationale">{side.rationale}</p>}
+      {probs.length > 0 && (
+        <p className="sub">
+          {probs.map(([name, p]) => `${name} ${(p * 100).toFixed(1)}%`).join(" · ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Side-by-side LLM vs. decider classification of one email; nothing is saved. */
+function CompareBackends({ emailId }: { emailId: number }) {
+  const toast = useToast();
+  const [preview, setPreview] = useState<BackendPreview | null>(null);
+  return (
+    <>
+      <AsyncButton
+        onClick={async () => {
+          try {
+            setPreview(await post<BackendPreview>(`/llm/decider/preview/${emailId}`));
+          } catch (e) {
+            toast.error(errMsg(e));
+          }
+        }}
+      >
+        Compare LLM vs. decider
+      </AsyncButton>
+      {preview && (
+        <div className="form-grid">
+          <PreviewSide
+            title={`LLM${preview.active_backend === "llm" ? " (active)" : ""}`}
+            side={preview.llm}
+          />
+          <PreviewSide
+            title={`Decider${preview.active_backend === "decider" ? " (active)" : ""}`}
+            side={preview.decider}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -191,7 +264,8 @@ function EmailDetail({
           }}
         >
           ↻ Re-run classification &amp; rules
-        </AsyncButton>
+        </AsyncButton>{" "}
+        <CompareBackends emailId={email.id} />
 
         {!feedbackSent && (
           <FeedbackForm

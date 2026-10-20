@@ -240,6 +240,11 @@ export interface Settings {
   llm_digest_timeout_seconds: number;
   llm_max_concurrency: number;
   llm_max_context_tokens: number;
+  classifier_backend: "llm" | "decider";
+  decider_base_url: string;
+  decider_model: string;
+  decider_timeout_seconds: number;
+  decider_summary_source: "llm" | "snippet";
   llm_synthesis_enable_thinking: boolean;
   llm_synthesis_temperature: number;
   llm_synthesis_max_tokens: number;
@@ -295,6 +300,24 @@ export interface Digest {
   notify_telegram: boolean;
   notify_inapp: boolean;
   last_run: DigestLastRun | null;
+}
+
+export interface BackendPreviewSide {
+  ok: boolean;
+  error?: string;
+  model?: string;
+  category?: string;
+  confidence?: number;
+  rationale?: string;
+  probabilities?: Record<string, number>;
+  latency_ms: number;
+}
+
+export interface BackendPreview {
+  email_id: number;
+  active_backend: string;
+  llm: BackendPreviewSide;
+  decider: BackendPreviewSide;
 }
 
 export interface LlmQueue {

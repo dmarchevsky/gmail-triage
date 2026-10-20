@@ -510,6 +510,149 @@ function AccessSection() {
   );
 }
 
+/** Classifier backend switch: generative LLM vs. System One decision model. */
+function ClassifierBackend({ settings, saveValues }: Omit<IngestionProps, "draft" | "setDraft">) {
+  const toast = useToast();
+  const [url, setUrl] = useState(settings.decider_base_url);
+  const [model, setModel] = useState(settings.decider_model);
+  const [timeout, setTimeoutS] = useState(String(settings.decider_timeout_seconds));
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const decider = settings.classifier_backend === "decider";
+
+  const loadModels = async () => {
+    try {
+      const r = await post<{ ok: boolean; models?: string[]; error?: string }>(
+        "/llm/decider/models",
+        { base_url: url },
+      );
+      setModels(r.models ?? []);
+      setModelsError(r.ok ? null : (r.error ?? "unknown error"));
+    } catch (e) {
+      setModels([]);
+      setModelsError(errMsg(e));
+    }
+  };
+  useEffect(() => {
+    if (decider) loadModels();
+  }, [decider]);
+
+  const modelOptions = model && !models.includes(model) ? [model, ...models] : models;
+
+  return (
+    <div className="settings-section">
+      <h3>
+        Classifier backend{" "}
+        <Badge tone={decider ? "info" : "neutral"}>
+          {decider ? `decider · ${settings.decider_model}` : "generative LLM"}
+        </Badge>
+      </h3>
+      <p className="sub">
+        <b>LLM</b> classifies and summarizes each email in one generative call.{" "}
+        <b>Decider</b> picks the category with a decision model (System One{" "}
+        <code>/systemone</code>, e.g. d3-nano): fast and deterministic, returns real
+        probabilities, but writes no text — summaries, digest synthesis and criteria
+        suggestions still use the LLM below. Decider probabilities are calibrated differently
+        from LLM confidence, so review rule confidence thresholds after switching.
+      </p>
+      <div className="form-grid">
+        <label>
+          Backend
+          <select
+            value={settings.classifier_backend}
+            onChange={(e) => saveValues({ classifier_backend: e.target.value })}
+          >
+            <option value="llm">Generative LLM</option>
+            <option value="decider">Decider (System One)</option>
+          </select>
+        </label>
+        {decider && (
+          <>
+            <label>
+              Summaries in decider mode
+              <select
+                value={settings.decider_summary_source}
+                onChange={(e) => saveValues({ decider_summary_source: e.target.value })}
+              >
+                <option value="llm">Separate LLM call (falls back to snippet on failure)</option>
+                <option value="snippet">Gmail snippet only (no LLM)</option>
+              </select>
+            </label>
+            <label>
+              Decider base URL (empty = same as LLM)
+              <input
+                placeholder="http://192.168.6.11:8731/v1"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+            </label>
+            <label>
+              Decision model
+              <span className="input-action">
+                <select value={model} onChange={(e) => setModel(e.target.value)}>
+                  {modelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  title="Reload decision models (uses the base URL above)"
+                  aria-label="Reload decision models"
+                  onClick={loadModels}
+                >
+                  ↻
+                </button>
+              </span>
+              {modelsError && <span className="sub">Couldn't load models: {modelsError}</span>}
+            </label>
+            <label>
+              Decider timeout (s)
+              <input
+                type="number"
+                min="1"
+                value={timeout}
+                onChange={(e) => setTimeoutS(e.target.value)}
+              />
+            </label>
+          </>
+        )}
+      </div>
+      {decider && (
+        <div className="head-actions">
+          <button
+            className="primary"
+            onClick={() =>
+              saveValues({
+                decider_base_url: url.trim(),
+                decider_model: model,
+                decider_timeout_seconds: Number(timeout) || 30,
+              })
+            }
+          >
+            Save decider settings
+          </button>
+          <AsyncButton
+            onClick={async () => {
+              const r = await post<{
+                ok: boolean;
+                error?: string;
+                model?: string;
+                latency_ms?: number;
+              }>("/llm/decider/test", { base_url: url, model });
+              if (r.ok) toast.success(`Decider OK — ${r.model}, ${r.latency_ms} ms`);
+              else toast.error(`Decider unreachable: ${r.error}`);
+            }}
+          >
+            Test decider
+          </AsyncButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const TABS: { id: string; label: string }[] = [
   { id: "mailbox", label: "Mailbox" },
   { id: "processing", label: "Processing" },
@@ -686,6 +829,7 @@ export default function SettingsPage() {
 
       {tab === "processing" && (
         <>
+          <ClassifierBackend settings={settings} saveValues={saveValues} />
           <div className="settings-section">
             <h3>
               LLM Processing{" "}

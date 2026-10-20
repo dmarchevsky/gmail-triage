@@ -39,6 +39,16 @@ DEFAULTS: dict[str, Any] = {
     "llm_classify_timeout_seconds": 120,
     "llm_digest_timeout_seconds": 300,
     "llm_max_concurrency": 1,
+    # Classification backend: "llm" (generative chat_json — category, confidence,
+    # rationale and summary in one call) or "decider" (System One decision model,
+    # e.g. halogen d3-nano: category probabilities only, no generated text).
+    "classifier_backend": "llm",
+    "decider_base_url": "",  # empty -> same endpoint as the LLM
+    "decider_model": "d3-nano",
+    "decider_timeout_seconds": 30,
+    # Where decider-mode summaries come from: "llm" (separate generative call,
+    # non-fatal) or "snippet" (no summary; digests fall back to the Gmail snippet).
+    "decider_summary_source": "llm",
     # Model context window in tokens. 0 = auto/unknown (no output cap derived
     # from it); detected from the llama.cpp /props endpoint and shown in the UI,
     # but the stored value here is authoritative once set.
@@ -179,12 +189,20 @@ def get_all_settings(session: Session, redact: bool = True) -> dict[str, Any]:
     return out
 
 
+_ENUM_SETTINGS: dict[str, tuple[str, ...]] = {
+    "classifier_backend": ("llm", "decider"),
+    "decider_summary_source": ("llm", "snippet"),
+}
+
+
 def update_settings(session: Session, updates: dict[str, Any]) -> None:
     for key, value in updates.items():
         if key not in DEFAULTS:
             raise KeyError(f"Unknown setting: {key}")
         if key == "gmail_ingest_mode" and value not in ("poll", "push"):
             raise ValueError(f"gmail_ingest_mode must be 'poll' or 'push', got {value!r}")
+        if key in _ENUM_SETTINGS and value not in _ENUM_SETTINGS[key]:
+            raise ValueError(f"{key} must be one of {_ENUM_SETTINGS[key]}, got {value!r}")
         if key == "retention_days" and int(value) < 0:
             raise ValueError(f"retention_days must be non-negative, got {value!r}")
         set_setting(session, key, value)
