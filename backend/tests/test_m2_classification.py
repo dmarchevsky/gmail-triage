@@ -362,6 +362,47 @@ def test_llm_api_key_sent_on_classification(auth_client, seeded):
     assert chat.calls.last.request.headers["authorization"] == "Bearer sk-secret"
 
 
+def test_llm_extra_headers_is_secret_and_validated(auth_client, db_session):
+    from app.models import Setting
+
+    resp = auth_client.put("/api/v1/settings", json={
+        "llm_extra_headers": "CF-Access-Client-Id: abc\n\n# note\nCF-Access-Client-Secret: s3"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["llm_extra_headers_configured"] is True
+    assert "llm_extra_headers" not in body
+    stored = db_session.get(Setting, "llm_extra_headers").value
+    assert stored and "s3" not in stored
+
+    resp = auth_client.put("/api/v1/settings", json={"llm_extra_headers": "no colon here"})
+    assert resp.status_code == 400
+    resp = auth_client.put("/api/v1/settings", json={"llm_extra_headers": "bad name: x"})
+    assert resp.status_code == 400
+
+
+@respx.mock
+def test_llm_extra_headers_sent_on_classification(auth_client, seeded):
+    auth_client.put("/api/v1/settings", json={
+        "llm_api_key": "sk-secret", "llm_extra_headers": "X-Team: triage\nX-Token: t:1"})
+    mock_gmail_full(seeded)
+    chat = respx.post(CHAT_URL).mock(return_value=llm_response({
+        "category": "none", "confidence": 0.5, "rationale": "r", "summary": ""}))
+    auth_client.post("/api/v1/classify/run-now")
+    headers = chat.calls.last.request.headers
+    assert headers["x-team"] == "triage"
+    assert headers["x-token"] == "t:1"
+    assert headers["authorization"] == "Bearer sk-secret"
+
+
+@respx.mock
+def test_llm_models_uses_draft_extra_headers(auth_client):
+    route = respx.get(f"{LLM_BASE}/models").respond(200, json=_models_payload("m"))
+    body = auth_client.post("/api/v1/llm/models",
+                            json={"extra_headers": "X-Draft: yes"}).json()
+    assert body["ok"] is True
+    assert route.calls.last.request.headers["x-draft"] == "yes"
+
+
 @respx.mock
 def test_llm_models_lists_all_sorted(auth_client):
     respx.get(f"{LLM_BASE}/models").respond(

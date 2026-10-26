@@ -11,7 +11,7 @@ interface IngestionProps {
   settings: Settings;
   draft: Record<string, string>;
   setDraft: (d: Record<string, string>) => void;
-  saveValues: (values: Record<string, unknown>) => Promise<void>;
+  saveValues: (values: Record<string, unknown>) => Promise<boolean>;
 }
 
 function MailboxScope({
@@ -19,7 +19,7 @@ function MailboxScope({
   onSave,
 }: {
   settings: Settings;
-  onSave: (values: Record<string, unknown>) => Promise<void>;
+  onSave: (values: Record<string, unknown>) => Promise<boolean>;
 }) {
   const toast = useToast();
   const [labels, setLabels] = useState<GmailLabel[] | null>(null);
@@ -668,6 +668,7 @@ export default function SettingsPage() {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [telegramToken, setTelegramToken] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmExtraHeaders, setLlmExtraHeaders] = useState("");
   const [llmModels, setLlmModels] = useState<string[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
   const [llmModelsError, setLlmModelsError] = useState<string | null>(null);
@@ -686,13 +687,13 @@ export default function SettingsPage() {
   }, []);
 
   // Model picker options from the endpoint's GET /models. Unsaved draft
-  // URL/key are sent as overrides so the list reflects what's being edited.
-  const loadModels = async (baseUrl = "", apiKey = "") => {
+  // URL/key/headers are sent as overrides so the list reflects what's being edited.
+  const loadModels = async (baseUrl = "", apiKey = "", extraHeaders = "") => {
     setLlmModelsLoading(true);
     try {
       const r = await post<{ ok: boolean; models?: string[]; error?: string }>(
         "/llm/models",
-        { base_url: baseUrl, api_key: apiKey },
+        { base_url: baseUrl, api_key: apiKey, extra_headers: extraHeaders },
       );
       setLlmModels(r.models ?? []);
       setLlmModelsError(r.ok ? null : (r.error ?? "unknown error"));
@@ -718,8 +719,10 @@ export default function SettingsPage() {
       setDraft({});
       toast.success("Settings saved");
       await refresh();
+      return true;
     } catch (e) {
       toast.error(errMsg(e));
+      return false;
     }
   };
 
@@ -878,6 +881,34 @@ export default function SettingsPage() {
                   </span>
                 )}
               </label>
+              <label className="span2">
+                Extra HTTP headers (optional; one "Name: value" per line, sent with every
+                LLM and decider request)
+                <textarea
+                  rows={3}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={
+                    settings.llm_extra_headers_configured
+                      ? "configured — leave blank to keep"
+                      : "CF-Access-Client-Id: …\nCF-Access-Client-Secret: …"
+                  }
+                  value={llmExtraHeaders}
+                  onChange={(e) => setLlmExtraHeaders(e.target.value)}
+                />
+                {settings.llm_extra_headers_configured && (
+                  <span className="sub">
+                    Headers saved (stored encrypted, not shown).{" "}
+                    <button
+                      type="button"
+                      className="link-btn"
+                      onClick={() => saveValues({ llm_extra_headers: "" })}
+                    >
+                      Clear
+                    </button>
+                  </span>
+                )}
+              </label>
               <label>
                 Model
                 <span className="input-action">
@@ -895,7 +926,7 @@ export default function SettingsPage() {
                   </select>
                   <button
                     type="button"
-                    title="Reload models (uses the base URL and API key above)"
+                    title="Reload models (uses the base URL, API key and headers above)"
                     aria-label="Reload models"
                     disabled={llmModelsLoading}
                     onClick={() =>
@@ -904,6 +935,7 @@ export default function SettingsPage() {
                           ? draft.llm_base_url
                           : settings.llm_base_url,
                         llmApiKey,
+                        llmExtraHeaders,
                       )
                     }
                   >
@@ -984,13 +1016,19 @@ export default function SettingsPage() {
                   if (draft.llm_base_url !== undefined) values.llm_base_url = draft.llm_base_url;
                   if (draft.llm_model !== undefined) values.llm_model = draft.llm_model;
                   if (llmApiKey) values.llm_api_key = llmApiKey;
+                  if (llmExtraHeaders.trim()) values.llm_extra_headers = llmExtraHeaders;
                   for (const [key] of llmFields)
                     if (draft[key] !== undefined) values[key] = Number(draft[key]);
                   if (draft.llm_synthesis_temperature !== undefined)
                     values.llm_synthesis_temperature = Number(draft.llm_synthesis_temperature);
                   if (draft.llm_synthesis_max_tokens !== undefined)
                     values.llm_synthesis_max_tokens = Number(draft.llm_synthesis_max_tokens);
-                  saveValues(values).then(() => setLlmApiKey(""));
+                  // Keep the secret inputs on failure (e.g. a malformed header line).
+                  saveValues(values).then((ok) => {
+                    if (!ok) return;
+                    setLlmApiKey("");
+                    setLlmExtraHeaders("");
+                  });
                 }}
               >
                 Save LLM settings

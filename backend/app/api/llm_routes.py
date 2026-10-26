@@ -46,6 +46,7 @@ class ModelsRequest(BaseModel):
     """Unsaved draft values from the Settings form; empty → stored setting / env."""
     base_url: str = ""
     api_key: str = ""
+    extra_headers: str = ""
 
 
 @router.post("/llm/models")
@@ -58,9 +59,12 @@ async def llm_models(body: ModelsRequest | None = None,
         settings["llm_base_url"] = body.base_url.strip()
     if body.api_key:
         settings["llm_api_key"] = body.api_key
+    if body.extra_headers.strip():
+        settings["llm_extra_headers"] = body.extra_headers
     base_url, model = llm.resolve_llm_target(settings)
     try:
-        models = await llm.list_models(base_url, llm.resolve_llm_api_key(settings))
+        models = await llm.list_models(base_url, llm.resolve_llm_api_key(settings),
+                                       headers=llm.resolve_llm_headers(settings))
     except Exception as e:  # noqa: BLE001 — any failure is reported, not raised
         return {"ok": False, "base_url": base_url, "error": str(e)[:300]}
     return {"ok": True, "base_url": base_url, "models": models,

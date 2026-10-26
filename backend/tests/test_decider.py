@@ -98,6 +98,16 @@ def test_decider_none_choice_leaves_uncategorized(auth_client, db_session, seede
 
 
 @respx.mock
+def test_decider_sends_extra_headers(auth_client, seeded, snippet_summaries):
+    auth_client.put("/api/v1/settings", json={"llm_extra_headers": "X-Team: triage"})
+    mock_gmail_full(seeded)
+    route = respx.post(SYSTEMONE_URL).mock(return_value=decider_response(
+        "none", {"MarketNews": 0.1, "Receipts": 0.1, "none": 0.8}))
+    auth_client.post("/api/v1/classify/run-now")
+    assert route.calls.last.request.headers["x-team"] == "triage"
+
+
+@respx.mock
 def test_snippet_mode_makes_no_generative_call(auth_client, db_session, seeded,
                                                snippet_summaries):
     mock_gmail_full(seeded)

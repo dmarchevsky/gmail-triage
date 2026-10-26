@@ -70,9 +70,35 @@ def resolve_llm_api_key(settings: dict[str, Any] | None = None) -> str:
     return (settings or {}).get("llm_api_key") or "not-needed"
 
 
-def _client(base_url: str, timeout: float, api_key: str = "not-needed") -> AsyncOpenAI:
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+
+def parse_extra_headers(text: str | None) -> dict[str, str]:
+    """`Name: value` lines → headers dict. Blank lines and `#` comments are
+    skipped; raises ValueError on a malformed line."""
+    headers: dict[str, str] = {}
+    for lineno, line in enumerate((text or "").splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition(":")
+        name, value = name.strip(), value.strip()
+        if not sep or not _HEADER_NAME_RE.match(name):
+            raise ValueError(f"llm_extra_headers line {lineno}: expected 'Name: value'")
+        headers[name] = value
+    return headers
+
+
+def resolve_llm_headers(settings: dict[str, Any] | None = None) -> dict[str, str]:
+    """Extra HTTP headers sent with every request to the endpoint (e.g. a
+    Cloudflare Access service token). They override the API-key header."""
+    return parse_extra_headers((settings or {}).get("llm_extra_headers"))
+
+
+def _client(base_url: str, timeout: float, api_key: str = "not-needed",
+            headers: dict[str, str] | None = None) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout,
-                       max_retries=0)
+                       max_retries=0, default_headers=headers or None)
 
 
 async def chat_json(system: str, user: str, schema: dict, schema_name: str,
@@ -86,7 +112,8 @@ async def chat_json(system: str, user: str, schema: dict, schema_name: str,
     on unparseable/invalid output, then LLMInvalidOutput.
     """
     base_url, model = resolve_llm_target(settings)
-    client = _client(base_url, timeout, resolve_llm_api_key(settings))
+    client = _client(base_url, timeout, resolve_llm_api_key(settings),
+                     resolve_llm_headers(settings))
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -219,7 +246,8 @@ async def chat_text(system: str, user: str, timeout: float,
     reasoning_content, which is where these models draft their final answer.
     """
     base_url, model = resolve_llm_target(settings)
-    client = _client(base_url, timeout, resolve_llm_api_key(settings))
+    client = _client(base_url, timeout, resolve_llm_api_key(settings),
+                     resolve_llm_headers(settings))
     kwargs: dict[str, Any] = {}
     if max_tokens is not None and max_tokens > 0:
         kwargs["max_tokens"] = max_tokens
@@ -289,9 +317,10 @@ def _parse_against_schema(raw: str, schema: dict) -> dict | None:
     return data
 
 
-async def list_models(base_url: str, api_key: str, timeout: float = 10) -> list[str]:
+async def list_models(base_url: str, api_key: str, timeout: float = 10,
+                      headers: dict[str, str] | None = None) -> list[str]:
     """Sorted model ids from the endpoint's GET /models. Raises on any failure."""
-    client = _client(base_url, timeout, api_key)
+    client = _client(base_url, timeout, api_key, headers)
     try:
         models = await client.models.list()
         return sorted(m.id for m in models.data)
@@ -303,7 +332,8 @@ async def health_probe(settings: dict[str, Any] | None = None,
                        timeout: float = 10) -> dict:
     base_url, model = resolve_llm_target(settings)
     try:
-        models = await list_models(base_url, resolve_llm_api_key(settings), timeout)
+        models = await list_models(base_url, resolve_llm_api_key(settings), timeout,
+                                   resolve_llm_headers(settings))
         app_state.llm_status = "ok"
         return {"ok": True, "base_url": base_url,
                 "models": models[:5], "configured_model": model}
@@ -323,6 +353,7 @@ async def fetch_context_length(settings: dict[str, Any] | None = None,
     base_url, _ = resolve_llm_target(settings)
     api_key = (settings or {}).get("llm_api_key")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers.update(resolve_llm_headers(settings))
     root = base_url.rstrip("/")
     if root.endswith("/v1"):
         root = root[: -len("/v1")]

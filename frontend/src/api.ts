@@ -237,6 +237,7 @@ export interface Settings {
   llm_base_url: string;
   llm_model: string;
   llm_api_key_configured: boolean;
+  llm_extra_headers_configured: boolean;
   llm_classify_timeout_seconds: number;
   llm_digest_timeout_seconds: number;
   llm_max_concurrency: number;

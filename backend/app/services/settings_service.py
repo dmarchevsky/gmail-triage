@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.config import get_config
 from app.models import Setting
+from app.services import llm
 
 SECRET_KEYS = {
     "telegram_bot_token",
     "gmail_client_secret_json",
     "llm_api_key",
+    "llm_extra_headers",
     # Internal (not in DEFAULTS, so never listed/updatable via /settings):
     # generated on first use by services/webpush.py.
     "webpush_vapid_private_key",
@@ -36,6 +38,9 @@ DEFAULTS: dict[str, Any] = {
     "llm_base_url": "",  # empty -> use env LLM_BASE_URL
     "llm_model": "",
     "llm_api_key": "",  # empty -> keyless local endpoint
+    # Extra HTTP headers for the LLM/decider endpoint, one `Name: value` per line
+    # (e.g. CF-Access-Client-Id / CF-Access-Client-Secret). Secret: may hold credentials.
+    "llm_extra_headers": "",
     "llm_classify_timeout_seconds": 120,
     "llm_digest_timeout_seconds": 300,
     "llm_max_concurrency": 1,
@@ -205,6 +210,8 @@ def update_settings(session: Session, updates: dict[str, Any]) -> None:
             raise ValueError(f"{key} must be one of {_ENUM_SETTINGS[key]}, got {value!r}")
         if key == "retention_days" and int(value) < 0:
             raise ValueError(f"retention_days must be non-negative, got {value!r}")
+        if key == "llm_extra_headers":
+            llm.parse_extra_headers(value)
         set_setting(session, key, value)
 
 

@@ -65,7 +65,8 @@ def resolve_decider_target(settings: dict[str, Any] | None = None) -> tuple[str,
 
 def _headers(settings: dict[str, Any]) -> dict[str, str]:
     api_key = settings.get("llm_api_key")
-    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return {**headers, **llm.resolve_llm_headers(settings)}
 
 
 def build_options(categories: list[Category]) -> dict[str, str]:
