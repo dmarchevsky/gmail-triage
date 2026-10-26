@@ -10,6 +10,11 @@ subjects (`feat:` → Features, `fix:` → Fixes). Text written by hand under
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-26
+
+### Other
+- Update cloudflared to 2026.10.4
+
 ## [1.2.0] - 2026-10-26
 
 ### Features
