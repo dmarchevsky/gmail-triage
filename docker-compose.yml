@@ -53,7 +53,7 @@ services:
   # in the Zero Trust dashboard (service: http://mailtriage:8080), behind a
   # Cloudflare Access application. Enabled with COMPOSE_PROFILES=tunnel in .env.
   cloudflared:
-    image: cloudflare/cloudflared:2026.8.3
+    image: cloudflare/cloudflared:2026.10.4
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}  # required when the tunnel profile is on
